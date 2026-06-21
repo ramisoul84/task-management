@@ -1,4 +1,3 @@
-// internal/app/app.go
 package app
 
 import (
@@ -6,10 +5,15 @@ import (
 	"fmt"
 
 	"github.com/ramisoul84/task-management/internal/config"
+	"github.com/ramisoul84/task-management/internal/repository"
 	fiberServer "github.com/ramisoul84/task-management/internal/server/http"
+	"github.com/ramisoul84/task-management/internal/server/http/handler"
+	"github.com/ramisoul84/task-management/internal/service"
+	authUtil "github.com/ramisoul84/task-management/pkg/auth"
 	"github.com/ramisoul84/task-management/pkg/cache"
 	"github.com/ramisoul84/task-management/pkg/database"
 	"github.com/ramisoul84/task-management/pkg/logger"
+	"github.com/ramisoul84/task-management/pkg/validator"
 )
 
 type App struct {
@@ -39,8 +43,23 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	log.Info().Msg("redis connected")
 
+	// utlities
+	hasher := authUtil.NewHasher(cfg.Security.Cost)
+	token := authUtil.NewTokenService(cfg.Security)
+	requestValidator := validator.New()
+
+	// repositories
+	userRepo := repository.NewUserRepository(db)
+	tokenRepo := repository.NewTokenRepository(redisCache, cfg.Security.RefreshTokenTTL)
+
+	// services
+	authSvc := service.NewAuthService(userRepo, tokenRepo, token, hasher, log, cfg.Security.AccessTokenTTL)
+
+	// handlers
+	authHandler := handler.NewAuthHandler(authSvc, requestValidator, cfg.Security)
+
 	// Server
-	server := fiberServer.NewServer(cfg, log)
+	server := fiberServer.NewServer(cfg, log, authHandler)
 
 	return &App{
 		cfg:    cfg,

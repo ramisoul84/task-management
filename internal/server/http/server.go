@@ -1,4 +1,3 @@
-// internal/server/http/server.go
 package http
 
 import (
@@ -8,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/ramisoul84/task-management/internal/config"
+	"github.com/ramisoul84/task-management/internal/server/http/handler"
 	"github.com/ramisoul84/task-management/pkg/logger"
 )
 
@@ -17,7 +17,7 @@ type Server struct {
 	addr string
 }
 
-func NewServer(cfg *config.Config, log *logger.Logger) *Server {
+func NewServer(cfg *config.Config, log *logger.Logger, authHandler *handler.AuthHandler) *Server {
 	app := fiber.New(fiber.Config{
 		AppName:               cfg.App.Name,
 		DisableStartupMessage: true,
@@ -28,7 +28,7 @@ func NewServer(cfg *config.Config, log *logger.Logger) *Server {
 		ErrorHandler:          errorHandler(log),
 	})
 
-	setupRoutes(app)
+	setupRoutes(app, authHandler)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 
@@ -68,12 +68,18 @@ func errorHandler(log *logger.Logger) fiber.ErrorHandler {
 	}
 }
 
-func setupRoutes(app *fiber.App) {
-	// Health check
+func setupRoutes(app *fiber.App, authHandler *handler.AuthHandler) {
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"status": "ok",
 			"time":   time.Now(),
 		})
 	})
+
+	api := app.Group("/api/v1")
+	auth := api.Group("/auth")
+	auth.Post("/register", authHandler.Register)
+	auth.Post("/login", authHandler.Login)
+	auth.Post("/refresh", authHandler.Refresh)
+	auth.Post("/logout", authHandler.Logout)
 }

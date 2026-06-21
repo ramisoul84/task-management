@@ -1,4 +1,3 @@
-// cmd/task-management/main.go
 package main
 
 import (
@@ -10,10 +9,15 @@ import (
 
 	"github.com/ramisoul84/task-management/internal/app"
 	"github.com/ramisoul84/task-management/internal/config"
+	"github.com/ramisoul84/task-management/pkg/migrator"
 )
 
 func main() {
 	cfg := config.Load(os.Getenv("APP_ENV"))
+
+	if err := migrator.Run(cfg.DB, cfg.App.MigrationsDir); err != nil {
+		log.Fatalf("migration: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
