@@ -1,35 +1,43 @@
-// main.go
+// cmd/task-management/main.go
 package main
 
 import (
+	"context"
+	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/ramisoul84/task-management/internal/app"
 	"github.com/ramisoul84/task-management/internal/config"
-	"github.com/ramisoul84/task-management/pkg/logger"
 )
 
 func main() {
-	env := os.Getenv("APP_ENV")
-	if env == "" {
-		env = "development"
+	cfg := config.Load(os.Getenv("APP_ENV"))
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	application, err := app.New(cfg)
+	if err != nil {
+		log.Fatalf("task-management: %v", err)
 	}
 
-	cfg := config.Load(env)
+	serverErr := application.Start()
 
-	// Create logger
-	log := logger.New(
-		cfg.Logger.Level,
-		cfg.App.Name,
-		cfg.IsDevelopment(),
-		cfg.Logger.Output,
-	)
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			log.Printf("task-management: server error: %v", err)
+		}
+	case <-ctx.Done():
+		log.Println("shutdown signal received")
+	}
 
-	// Use logger
-	log.Info().
-		Str("env", cfg.App.Env).
-		Msg("application starting")
+	if err := application.Shutdown(); err != nil {
+		log.Printf("task-management: shutdown: %v", err)
+		os.Exit(1)
+	}
 
-	log.Debug().Msg("debug message")
-	log.Warn().Msg("warning message")
-	log.Error().Msg("error message")
+	log.Println("application stopped")
 }
