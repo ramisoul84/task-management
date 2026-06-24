@@ -17,4 +17,7 @@ var (
 
 	// ErrUnauthorized - user is not authenticated
 	ErrUnauthorized = errors.New("unauthorized")
+
+	// ErrForbidden - user doesn't have permission to perform action
+	ErrForbidden = errors.New("forbidden")
 )

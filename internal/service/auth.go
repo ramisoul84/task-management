@@ -53,10 +53,6 @@ func (s *authSvc) Register(ctx context.Context, email, password, name string) (*
 	email = normalizeEmail(email)
 	name = capitalizeFirst(name)
 
-	if email == "" || password == "" || name == "" {
-		return nil, domain.ErrInvalidInput
-	}
-
 	passwordHash, err := s.hasher.Hash(password)
 	if err != nil {
 		s.log.Error().Err(err).Msg("hash password")

@@ -51,15 +51,19 @@ func New(cfg *config.Config) (*App, error) {
 	// repositories
 	userRepo := repository.NewUserRepository(db)
 	tokenRepo := repository.NewTokenRepository(redisCache, cfg.Security.RefreshTokenTTL)
+	teamRepo := repository.NewTeamRepository(db)
 
 	// services
 	authSvc := service.NewAuthService(userRepo, tokenRepo, token, hasher, log, cfg.Security.AccessTokenTTL)
+	rbacService := service.NewRBACService(teamRepo)
+	teamSvc := service.NewTeamService(teamRepo, userRepo, rbacService, log)
 
 	// handlers
 	authHandler := handler.NewAuthHandler(authSvc, requestValidator, cfg.Security)
+	teamHandler := handler.NewTeamHandler(teamSvc, requestValidator)
 
 	// Server
-	server := fiberServer.NewServer(cfg, log, authHandler)
+	server := fiberServer.NewServer(cfg, token, tokenRepo, log, authHandler, teamHandler)
 
 	return &App{
 		cfg:    cfg,

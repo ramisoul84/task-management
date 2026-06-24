@@ -7,17 +7,29 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/ramisoul84/task-management/internal/config"
+	"github.com/ramisoul84/task-management/internal/repository"
 	"github.com/ramisoul84/task-management/internal/server/http/handler"
+	"github.com/ramisoul84/task-management/internal/server/http/middleware"
+	"github.com/ramisoul84/task-management/pkg/auth"
 	"github.com/ramisoul84/task-management/pkg/logger"
 )
 
 type Server struct {
-	app  *fiber.App
-	log  *logger.Logger
-	addr string
+	app       *fiber.App
+	token     auth.TokenService
+	tokenRepo repository.TokenRepository
+	log       *logger.Logger
+	addr      string
 }
 
-func NewServer(cfg *config.Config, log *logger.Logger, authHandler *handler.AuthHandler) *Server {
+func NewServer(
+	cfg *config.Config,
+	token auth.TokenService,
+	tokenRepo repository.TokenRepository,
+	log *logger.Logger,
+	authHandler *handler.AuthHandler,
+	teamHandler *handler.TeamHandler,
+) *Server {
 	app := fiber.New(fiber.Config{
 		AppName:               cfg.App.Name,
 		DisableStartupMessage: true,
@@ -28,15 +40,19 @@ func NewServer(cfg *config.Config, log *logger.Logger, authHandler *handler.Auth
 		ErrorHandler:          errorHandler(log),
 	})
 
-	setupRoutes(app, authHandler)
-
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 
-	return &Server{
-		app:  app,
-		log:  log,
-		addr: addr,
+	server := &Server{
+		app:       app,
+		token:     token,
+		tokenRepo: tokenRepo,
+		log:       log,
+		addr:      addr,
 	}
+
+	server.setupRoutes(authHandler, teamHandler)
+
+	return server
 }
 
 func (s *Server) Run() error {
@@ -68,18 +84,25 @@ func errorHandler(log *logger.Logger) fiber.ErrorHandler {
 	}
 }
 
-func setupRoutes(app *fiber.App, authHandler *handler.AuthHandler) {
-	app.Get("/health", func(c *fiber.Ctx) error {
+func (s *Server) setupRoutes(authHandler *handler.AuthHandler, teamHandler *handler.TeamHandler) {
+	s.app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"status": "ok",
 			"time":   time.Now(),
 		})
 	})
 
-	api := app.Group("/api/v1")
+	api := s.app.Group("/api/v1")
 	auth := api.Group("/auth")
 	auth.Post("/register", authHandler.Register)
 	auth.Post("/login", authHandler.Login)
 	auth.Post("/refresh", authHandler.Refresh)
 	auth.Post("/logout", authHandler.Logout)
+
+	protected := api.Group("", middleware.Auth(s.token, s.tokenRepo))
+
+	teams := protected.Group("/teams")
+	teams.Post("/", teamHandler.Create)
+	teams.Get("/", teamHandler.List)
+	teams.Post("/:id/invite", teamHandler.Invite)
 }

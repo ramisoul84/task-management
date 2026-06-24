@@ -1,0 +1,199 @@
+package repository
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/go-sql-driver/mysql"
+	"github.com/ramisoul84/task-management/internal/domain"
+	"github.com/ramisoul84/task-management/pkg/database"
+)
+
+type TeamRepository interface {
+	CreateWithOwner(ctx context.Context, team *domain.Team) error
+	ListTeamsByUser(ctx context.Context, userID string) ([]*domain.Team, error)
+	GetUserRoleInTeam(ctx context.Context, userID string, teamID string) (domain.Role, error)
+	AddMember(ctx context.Context, member *domain.TeamMember) error
+	IsTeamMember(ctx context.Context, teamID string, userID string) (bool, error)
+}
+
+type teamRepo struct {
+	db *database.DB
+}
+
+func NewTeamRepository(db *database.DB) TeamRepository {
+	return &teamRepo{db: db}
+}
+
+func (r *teamRepo) CreateWithOwner(ctx context.Context, team *domain.Team) error {
+	const op = "teamRepo.CreateWithOwner"
+
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("%s: begin transaction: %w", op, err)
+	}
+
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	const createTeamQuery = `
+		INSERT INTO teams (
+			id,
+			name,
+			created_by,
+			created_at
+		)
+		VALUES (?, ?, ?, ?)
+	`
+
+	if _, err := tx.ExecContext(
+		ctx,
+		createTeamQuery,
+		team.ID,
+		team.Name,
+		team.CreatedBy,
+		team.CreatedAt,
+	); err != nil {
+		return fmt.Errorf("%s: insert team: %w", op, err)
+	}
+
+	const addOwnerQuery = `
+		INSERT INTO team_members (
+			team_id,
+			user_id,
+			role
+		)
+		VALUES (?, ?, ?)
+	`
+
+	if _, err := tx.ExecContext(
+		ctx,
+		addOwnerQuery,
+		team.ID,
+		team.CreatedBy,
+		domain.RoleOwner,
+	); err != nil {
+		return fmt.Errorf("%s: insert owner: %w", op, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%s: commit transaction: %w", op, err)
+	}
+
+	return nil
+}
+
+func (r *teamRepo) ListTeamsByUser(ctx context.Context, userID string) ([]*domain.Team, error) {
+	const op = "teamRepo.ListTeamsByUser"
+
+	const query = `
+		SELECT
+			t.id,
+			t.name,
+			t.created_by,
+			t.created_at
+		FROM teams AS t
+		INNER JOIN team_members AS tm
+			ON tm.team_id = t.id
+		WHERE tm.user_id = ?
+		ORDER BY t.created_at DESC
+	`
+
+	teams := make([]*domain.Team, 0)
+
+	if err := r.db.SelectContext(ctx, &teams, query, userID); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return teams, nil
+}
+
+func (r *teamRepo) GetUserRoleInTeam(ctx context.Context, teamID string, userID string) (domain.Role, error) {
+	const op = "teamRepo.GetUserRoleInTeam"
+
+	const query = `
+		SELECT role
+		FROM team_members
+		WHERE team_id = ?
+		  AND user_id = ?
+	`
+
+	var role domain.Role
+
+	err := r.db.GetContext(
+		ctx,
+		&role,
+		query,
+		teamID, // team_id first
+		userID, // user_id second
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", domain.ErrNotFound
+		}
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	return role, nil
+}
+
+func (r *teamRepo) AddMember(ctx context.Context, member *domain.TeamMember) error {
+	const op = "teamRepo.AddMember"
+
+	const query = `
+		INSERT INTO team_members (
+			team_id,
+			user_id,
+			role
+		)
+		VALUES (?, ?, ?)
+	`
+
+	if _, err := r.db.ExecContext(
+		ctx,
+		query,
+		member.TeamID,
+		member.UserID,
+		member.Role,
+	); err != nil {
+		var mysqlErr *mysql.MySQLError
+
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return domain.ErrAlreadyExists
+		}
+
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (r *teamRepo) IsTeamMember(ctx context.Context, teamID string, userID string) (bool, error) {
+	const op = "teamRepo.IsTeamMember"
+
+	const query = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM team_members
+			WHERE team_id = ?
+			  AND user_id = ?
+		)
+	`
+
+	var exists bool
+
+	if err := r.db.GetContext(
+		ctx,
+		&exists,
+		query,
+		teamID,
+		userID,
+	); err != nil {
+		return false, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return exists, nil
+}
