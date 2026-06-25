@@ -30,4 +30,7 @@ var (
 
 	// ErrTooManyRequests - rate limit exceeded
 	ErrTooManyRequests = errors.New("too many requests")
+
+	// ErrAssigneeNotInTeam - assignee is not a member of the team
+	ErrAssigneeNotInTeam = errors.New("assignee not in team")
 )

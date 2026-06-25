@@ -13,6 +13,7 @@ type RBACService interface {
 	CanInviteMember(ctx context.Context, teamID string, actorID string) error
 	CanChangeMemberRole(ctx context.Context, teamID string, actorID string, targetUserID string, newRole domain.Role) error
 	CanRemoveMember(ctx context.Context, teamID string, actorID string, targetUserID string) error
+	CanCreateTask(ctx context.Context, teamID string, actorID string) error
 }
 
 type rbacService struct {
@@ -185,6 +186,34 @@ func (s *rbacService) CanRemoveMember(
 
 	// Admin cannot remove another admin (only owner can)
 	if actorRole == domain.RoleAdmin && targetRole == domain.RoleAdmin {
+		return domain.ErrForbidden
+	}
+
+	return nil
+}
+
+// CanCreateTask checks if actor can create tasks in team.
+//
+// Permission rules:
+//   - Any team member can create tasks
+func (s *rbacService) CanCreateTask(ctx context.Context, teamID string, actorID string) error {
+	const op = "rbac.CanCreateTask"
+
+	// Input validation
+	if teamID == "" {
+		return fmt.Errorf("%s: team ID is required: %w", op, domain.ErrInvalidInput)
+	}
+	if actorID == "" {
+		return fmt.Errorf("%s: actor ID is required: %w", op, domain.ErrInvalidInput)
+	}
+
+	// Any team member can create tasks
+	isMember, err := s.teamRepo.IsTeamMember(ctx, teamID, actorID)
+	if err != nil {
+		return fmt.Errorf("%s: check membership: %w", op, err)
+	}
+
+	if !isMember {
 		return domain.ErrForbidden
 	}
 

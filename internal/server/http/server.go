@@ -29,6 +29,7 @@ func NewServer(
 	log *logger.Logger,
 	authHandler *handler.AuthHandler,
 	teamHandler *handler.TeamHandler,
+	taskHandler *handler.TaskHandler,
 ) *Server {
 	app := fiber.New(fiber.Config{
 		AppName:               cfg.App.Name,
@@ -50,7 +51,7 @@ func NewServer(
 		addr:      addr,
 	}
 
-	server.setupRoutes(authHandler, teamHandler)
+	server.setupRoutes(authHandler, teamHandler, taskHandler)
 
 	return server
 }
@@ -84,7 +85,11 @@ func errorHandler(log *logger.Logger) fiber.ErrorHandler {
 	}
 }
 
-func (s *Server) setupRoutes(authHandler *handler.AuthHandler, teamHandler *handler.TeamHandler) {
+func (s *Server) setupRoutes(
+	authHandler *handler.AuthHandler,
+	teamHandler *handler.TeamHandler,
+	taskHandler *handler.TaskHandler,
+) {
 	s.app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"status": "ok",
@@ -108,4 +113,8 @@ func (s *Server) setupRoutes(authHandler *handler.AuthHandler, teamHandler *hand
 	teams.Get("/:id/members", teamHandler.ListMembers)
 	teams.Patch("/:id/members/:userID/role", teamHandler.ChangeMemberRole)
 	teams.Delete("/:id/members/:userID", teamHandler.RemoveMember)
+
+	tasks := protected.Group("/tasks")
+	tasks.Post("/", taskHandler.Create)
+	tasks.Get("/", taskHandler.ListByTeam)
 }

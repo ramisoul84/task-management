@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS teams (
+    id CHAR(36) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    created_by CHAR(36) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (created_by)
+        REFERENCES users(id)
+        ON DELETE RESTRICT
+);
