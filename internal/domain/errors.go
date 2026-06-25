@@ -1,3 +1,4 @@
+// internal/domain/errors.go
 package domain
 
 import "errors"
@@ -20,4 +21,13 @@ var (
 
 	// ErrForbidden - user doesn't have permission to perform action
 	ErrForbidden = errors.New("forbidden")
+
+	// ErrConflict - resource conflict (e.g., version mismatch)
+	ErrConflict = errors.New("conflict")
+
+	// ErrInternalServer - internal server error
+	ErrInternalServer = errors.New("internal server error")
+
+	// ErrTooManyRequests - rate limit exceeded
+	ErrTooManyRequests = errors.New("too many requests")
 )

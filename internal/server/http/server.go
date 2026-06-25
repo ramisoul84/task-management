@@ -105,4 +105,7 @@ func (s *Server) setupRoutes(authHandler *handler.AuthHandler, teamHandler *hand
 	teams.Post("/", teamHandler.Create)
 	teams.Get("/", teamHandler.List)
 	teams.Post("/:id/invite", teamHandler.Invite)
+	teams.Get("/:id/members", teamHandler.ListMembers)
+	teams.Patch("/:id/members/:userID/role", teamHandler.ChangeMemberRole)
+	teams.Delete("/:id/members/:userID", teamHandler.RemoveMember)
 }

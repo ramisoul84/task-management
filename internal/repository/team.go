@@ -14,9 +14,12 @@ import (
 type TeamRepository interface {
 	CreateWithOwner(ctx context.Context, team *domain.Team) error
 	ListTeamsByUser(ctx context.Context, userID string) ([]*domain.Team, error)
-	GetUserRoleInTeam(ctx context.Context, userID string, teamID string) (domain.Role, error)
+	GetUserRoleInTeam(ctx context.Context, teamID string, userID string) (domain.Role, error)
 	AddMember(ctx context.Context, member *domain.TeamMember) error
 	IsTeamMember(ctx context.Context, teamID string, userID string) (bool, error)
+	UpdateMemberRole(ctx context.Context, teamID string, actorID string, userID string, role domain.Role) error
+	RemoveMember(ctx context.Context, actorID string, teamID string, userID string) error
+	ListMembers(ctx context.Context, teamID string) ([]*domain.TeamMemberResponse, error)
 }
 
 type teamRepo struct {
@@ -196,4 +199,113 @@ func (r *teamRepo) IsTeamMember(ctx context.Context, teamID string, userID strin
 	}
 
 	return exists, nil
+}
+
+func (r *teamRepo) UpdateMemberRole(ctx context.Context, teamID string, actorID string, userID string, role domain.Role) error {
+	const op = "teamRepo.UpdateMemberRole"
+
+	const query = `
+		UPDATE team_members AS target
+		INNER JOIN team_members AS actor
+			ON actor.team_id = target.team_id
+		   AND actor.user_id = ?
+		   AND actor.role IN ('owner', 'admin')
+		SET target.role = ?
+		WHERE target.team_id = ?
+		  AND target.user_id = ?
+	`
+
+	result, err := r.db.ExecContext(
+		ctx,
+		query,
+		actorID,
+		role,
+		teamID,
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s: rows affected: %w", op, err)
+	}
+
+	if rows == 0 {
+		return domain.ErrForbidden
+	}
+
+	return nil
+}
+
+func (r *teamRepo) RemoveMember(
+	ctx context.Context,
+	teamID string,
+	actorID string,
+	targetUserID string,
+) error {
+	const op = "teamRepo.RemoveMember"
+
+	const query = `
+		DELETE target
+		FROM team_members AS target
+		INNER JOIN team_members AS actor
+			ON actor.team_id = target.team_id
+		   AND actor.user_id = ?
+		   AND actor.role IN ('owner', 'admin')
+		WHERE target.team_id = ?
+		  AND target.user_id = ?
+		  AND target.role != 'owner'  -- Extra safety: never remove owner
+		  AND NOT (
+			actor.role = 'admin' 
+			AND target.role = 'admin'
+		  )  -- Admin cannot remove another admin
+	`
+
+	result, err := r.db.ExecContext(
+		ctx,
+		query,
+		actorID,
+		teamID,
+		targetUserID,
+	)
+	if err != nil {
+		return fmt.Errorf("%s: delete member: %w", op, err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s: rows affected: %w", op, err)
+	}
+
+	if rowsAffected == 0 {
+		return domain.ErrForbidden
+	}
+
+	return nil
+}
+
+func (r *teamRepo) ListMembers(ctx context.Context, teamID string) ([]*domain.TeamMemberResponse, error) {
+	const op = "teamRepo.ListMembers"
+
+	const query = `
+		SELECT
+			u.id AS user_id,
+			u.email,
+			u.name,
+			tm.role,
+			tm.created_at AS joined_at
+		FROM team_members tm
+		INNER JOIN users u ON u.id = tm.user_id
+		WHERE tm.team_id = ?
+		ORDER BY tm.created_at ASC
+	`
+
+	members := make([]*domain.TeamMemberResponse, 0)
+	if err := r.db.SelectContext(ctx, &members, query, teamID); err != nil {
+		return nil, fmt.Errorf("%s: select members: %w", op, err)
+	}
+
+	return members, nil
 }

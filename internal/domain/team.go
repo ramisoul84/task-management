@@ -30,3 +30,15 @@ type CreateTeamRequest struct {
 type InviteMemberRequest struct {
 	UserID string `json:"user_id" validate:"required,uuid"`
 }
+
+type ChangeMemberRoleRequest struct {
+	Role Role `json:"role" validate:"required,oneof=admin member"`
+}
+
+type TeamMemberResponse struct {
+	UserID   string    `json:"user_id"`
+	Email    string    `json:"email"`
+	Name     string    `json:"name"`
+	Role     Role      `json:"role"`
+	JoinedAt time.Time `json:"joined_at"`
+}
