@@ -14,11 +14,11 @@ type contextKey string
 const userIDKey contextKey = "user_id"
 
 // TokenBlacklist reports whether an access token's jti has been revoked.
-type TokenRopo interface {
+type TokenCache interface {
 	IsAccessTokenBlacklisted(ctx context.Context, jti string) (bool, error)
 }
 
-func Auth(tokens auth.TokenService, tokenRepo TokenRopo) fiber.Handler {
+func Auth(tokens auth.TokenService, tokenCache TokenCache) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		header := c.Get(fiber.HeaderAuthorization)
 
@@ -40,8 +40,8 @@ func Auth(tokens auth.TokenService, tokenRepo TokenRopo) fiber.Handler {
 		}
 
 		// Reject tokens that were revoked on logout.
-		if tokenRepo != nil {
-			banned, err := tokenRepo.IsAccessTokenBlacklisted(c.UserContext(), claims.JTI)
+		if tokenCache != nil {
+			banned, err := tokenCache.IsAccessTokenBlacklisted(c.UserContext(), claims.JTI)
 			if err != nil {
 				return fiber.ErrUnauthorized
 			}

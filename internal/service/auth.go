@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/ramisoul84/task-management/internal/cache"
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/internal/repository"
 	"github.com/ramisoul84/task-management/pkg/auth"
@@ -24,7 +25,7 @@ type AuthService interface {
 
 type authSvc struct {
 	userRepo     repository.UserRepository
-	tokenRepo    repository.TokenRepository
+	tokenCache   cache.TokenCache
 	token        auth.TokenService
 	hasher       auth.Hasher
 	log          *logger.Logger
@@ -33,7 +34,7 @@ type authSvc struct {
 
 func NewAuthService(
 	userRepo repository.UserRepository,
-	refreshTokenRepo repository.TokenRepository,
+	tokenCache cache.TokenCache,
 	token auth.TokenService,
 	hasher auth.Hasher,
 	log *logger.Logger,
@@ -41,7 +42,7 @@ func NewAuthService(
 ) AuthService {
 	return &authSvc{
 		userRepo:     userRepo,
-		tokenRepo:    refreshTokenRepo,
+		tokenCache:   tokenCache,
 		token:        token,
 		hasher:       hasher,
 		log:          log,
@@ -114,7 +115,7 @@ func (s *authSvc) Login(ctx context.Context, email, password string) (*domain.Au
 
 	refreshHash := s.token.HashRefreshToken(refreshToken)
 
-	err = s.tokenRepo.SetRefreshToken(ctx, refreshHash, user.ID)
+	err = s.tokenCache.SetRefreshToken(ctx, refreshHash, user.ID)
 	if err != nil {
 		s.log.Error().Err(err).Msg("save refresh token")
 		return nil, fmt.Errorf("save refresh token: %w", err)
@@ -139,7 +140,7 @@ func (s *authSvc) Refresh(ctx context.Context, refreshToken string) (*domain.Tok
 
 	oldHash := s.token.HashRefreshToken(refreshToken)
 
-	userID, err := s.tokenRepo.GetRefreshToken(ctx, oldHash)
+	userID, err := s.tokenCache.GetRefreshToken(ctx, oldHash)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			s.log.Warn().Msg("refresh token not found")
@@ -178,7 +179,7 @@ func (s *authSvc) Refresh(ctx context.Context, refreshToken string) (*domain.Tok
 
 	newHash := s.token.HashRefreshToken(newRefreshToken)
 
-	if err := s.tokenRepo.RotateRefreshToken(ctx, oldHash, newHash, user.ID); err != nil {
+	if err := s.tokenCache.RotateRefreshToken(ctx, oldHash, newHash, user.ID); err != nil {
 		if errors.Is(err, domain.ErrInvalidCredentials) {
 			s.log.Warn().Msg("refresh token reuse detected")
 			return nil, domain.ErrInvalidCredentials
@@ -203,7 +204,7 @@ func (s *authSvc) Logout(ctx context.Context, accessToken, refreshToken string) 
 		if claims, err := s.token.ValidateAccessToken(accessToken); err == nil && claims != nil {
 			ttl := time.Until(claims.ExpiresAt)
 			if ttl > 0 {
-				if err := s.tokenRepo.BlacklistAccessToken(ctx, claims.JTI, ttl); err != nil {
+				if err := s.tokenCache.BlacklistAccessToken(ctx, claims.JTI, ttl); err != nil {
 					s.log.Error().Err(err).Msg("blacklist access token")
 				}
 			}
@@ -218,7 +219,7 @@ func (s *authSvc) Logout(ctx context.Context, accessToken, refreshToken string) 
 
 	hash := s.token.HashRefreshToken(refreshToken)
 
-	if err := s.tokenRepo.DeleteRefreshToken(ctx, hash); err != nil {
+	if err := s.tokenCache.DeleteRefreshToken(ctx, hash); err != nil {
 		s.log.Error().Err(err).Msg("delete refresh token")
 		return fmt.Errorf("delete refresh token: %w", err)
 	}

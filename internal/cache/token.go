@@ -1,4 +1,4 @@
-package repository
+package cache
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type TokenRepository interface {
+type TokenCache interface {
 	SetRefreshToken(ctx context.Context, hash, userID string) error
 	GetRefreshToken(ctx context.Context, hash string) (string, error)
 	RotateRefreshToken(ctx context.Context, oldHash string, newHash string, userID string) error
@@ -20,19 +20,19 @@ type TokenRepository interface {
 	IsAccessTokenBlacklisted(ctx context.Context, jti string) (bool, error)
 }
 
-type tokenRepository struct {
+type tokenCache struct {
 	cache      *cache.Cache
 	refreshTTL time.Duration
 }
 
-func NewTokenRepository(cache *cache.Cache, refreshTTL time.Duration) TokenRepository {
-	return &tokenRepository{
+func NewTokenRepository(cache *cache.Cache, refreshTTL time.Duration) TokenCache {
+	return &tokenCache{
 		cache:      cache,
 		refreshTTL: refreshTTL,
 	}
 }
 
-func (r *tokenRepository) SetRefreshToken(ctx context.Context, hash, userID string) error {
+func (r *tokenCache) SetRefreshToken(ctx context.Context, hash, userID string) error {
 	key := refreshTokenKey(hash)
 
 	if err := r.cache.Client.Set(ctx, key, userID, r.refreshTTL).Err(); err != nil {
@@ -42,7 +42,7 @@ func (r *tokenRepository) SetRefreshToken(ctx context.Context, hash, userID stri
 	return nil
 }
 
-func (r *tokenRepository) GetRefreshToken(ctx context.Context, hash string) (string, error) {
+func (r *tokenCache) GetRefreshToken(ctx context.Context, hash string) (string, error) {
 	key := refreshTokenKey(hash)
 
 	userID, err := r.cache.Client.Get(ctx, key).Result()
@@ -57,7 +57,7 @@ func (r *tokenRepository) GetRefreshToken(ctx context.Context, hash string) (str
 	return userID, nil
 }
 
-func (r *tokenRepository) RotateRefreshToken(ctx context.Context, oldHash string, newHash string, userID string) error {
+func (r *tokenCache) RotateRefreshToken(ctx context.Context, oldHash string, newHash string, userID string) error {
 	oldKey := refreshTokenKey(oldHash)
 	newKey := refreshTokenKey(newHash)
 
@@ -75,7 +75,7 @@ func (r *tokenRepository) RotateRefreshToken(ctx context.Context, oldHash string
 	return nil
 }
 
-func (r *tokenRepository) DeleteRefreshToken(ctx context.Context, hash string) error {
+func (r *tokenCache) DeleteRefreshToken(ctx context.Context, hash string) error {
 	key := refreshTokenKey(hash)
 
 	if err := r.cache.Client.Del(ctx, key).Err(); err != nil {
@@ -85,7 +85,7 @@ func (r *tokenRepository) DeleteRefreshToken(ctx context.Context, hash string) e
 	return nil
 }
 
-func (r *tokenRepository) BlacklistAccessToken(ctx context.Context, jti string, ttl time.Duration) error {
+func (r *tokenCache) BlacklistAccessToken(ctx context.Context, jti string, ttl time.Duration) error {
 	if ttl <= 0 {
 		return nil
 	}
@@ -98,7 +98,7 @@ func (r *tokenRepository) BlacklistAccessToken(ctx context.Context, jti string, 
 	return nil
 }
 
-func (r *tokenRepository) IsAccessTokenBlacklisted(ctx context.Context, jti string) (bool, error) {
+func (r *tokenCache) IsAccessTokenBlacklisted(ctx context.Context, jti string) (bool, error) {
 	n, err := r.cache.Client.Exists(ctx, "auth:bl:"+jti).Result()
 	if err != nil {
 		return false, fmt.Errorf("cache: check blacklist %s: %w", jti, err)

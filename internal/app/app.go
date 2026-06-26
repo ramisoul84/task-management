@@ -4,24 +4,25 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ramisoul84/task-management/internal/cache"
 	"github.com/ramisoul84/task-management/internal/config"
 	"github.com/ramisoul84/task-management/internal/repository"
 	fiberServer "github.com/ramisoul84/task-management/internal/server/http"
 	"github.com/ramisoul84/task-management/internal/server/http/handler"
 	"github.com/ramisoul84/task-management/internal/service"
 	authUtil "github.com/ramisoul84/task-management/pkg/auth"
-	"github.com/ramisoul84/task-management/pkg/cache"
+	cacheRedis "github.com/ramisoul84/task-management/pkg/cache"
 	"github.com/ramisoul84/task-management/pkg/database"
 	"github.com/ramisoul84/task-management/pkg/logger"
 	"github.com/ramisoul84/task-management/pkg/validator"
 )
 
 type App struct {
-	cfg    *config.Config
-	log    *logger.Logger
-	db     *database.DB
-	cache  *cache.Cache
-	server *fiberServer.Server
+	cfg        *config.Config
+	log        *logger.Logger
+	db         *database.DB
+	redisCache *cacheRedis.Cache
+	server     *fiberServer.Server
 }
 
 func New(cfg *config.Config) (*App, error) {
@@ -36,7 +37,7 @@ func New(cfg *config.Config) (*App, error) {
 	log.Info().Msg("database connected")
 
 	// Redis
-	redisCache, err := cache.New(cfg.Cache)
+	redisCache, err := cacheRedis.New(cfg.Cache)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("redis: %w", err)
@@ -50,12 +51,14 @@ func New(cfg *config.Config) (*App, error) {
 
 	// repositories
 	userRepo := repository.NewUserRepository(db)
-	tokenRepo := repository.NewTokenRepository(redisCache, cfg.Security.RefreshTokenTTL)
 	teamRepo := repository.NewTeamRepository(db)
 	taskRepo := repository.NewTaskRepository(db)
 
+	// Caches
+	tokenCache := cache.NewTokenRepository(redisCache, cfg.Security.RefreshTokenTTL)
+
 	// services
-	authSvc := service.NewAuthService(userRepo, tokenRepo, token, hasher, log, cfg.Security.AccessTokenTTL)
+	authSvc := service.NewAuthService(userRepo, tokenCache, token, hasher, log, cfg.Security.AccessTokenTTL)
 	rbacService := service.NewRBACService(teamRepo)
 	teamSvc := service.NewTeamService(teamRepo, userRepo, rbacService, log)
 	taskSvc := service.NewTaskService(taskRepo, teamRepo, rbacService, log)
@@ -66,14 +69,14 @@ func New(cfg *config.Config) (*App, error) {
 	taskHandler := handler.NewTaskHandler(taskSvc, requestValidator)
 
 	// Server
-	server := fiberServer.NewServer(cfg, token, tokenRepo, log, authHandler, teamHandler, taskHandler)
+	server := fiberServer.NewServer(cfg, token, tokenCache, log, authHandler, teamHandler, taskHandler)
 
 	return &App{
-		cfg:    cfg,
-		log:    log,
-		db:     db,
-		cache:  redisCache,
-		server: server,
+		cfg:        cfg,
+		log:        log,
+		db:         db,
+		redisCache: redisCache,
+		server:     server,
 	}, nil
 }
 
@@ -107,7 +110,7 @@ func (a *App) Shutdown() error {
 	}
 	a.log.Info().Msg("database closed")
 
-	if err := a.cache.Close(); err != nil {
+	if err := a.redisCache.Close(); err != nil {
 		a.log.Error().Err(err).Msg("cache close error")
 	}
 	a.log.Info().Msg("cache closed")

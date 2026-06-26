@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/ramisoul84/task-management/internal/cache"
 	"github.com/ramisoul84/task-management/internal/config"
-	"github.com/ramisoul84/task-management/internal/repository"
 	"github.com/ramisoul84/task-management/internal/server/http/handler"
 	"github.com/ramisoul84/task-management/internal/server/http/middleware"
 	"github.com/ramisoul84/task-management/pkg/auth"
@@ -15,17 +15,17 @@ import (
 )
 
 type Server struct {
-	app       *fiber.App
-	token     auth.TokenService
-	tokenRepo repository.TokenRepository
-	log       *logger.Logger
-	addr      string
+	app        *fiber.App
+	tokenScv   auth.TokenService
+	tokenCache cache.TokenCache
+	log        *logger.Logger
+	addr       string
 }
 
 func NewServer(
 	cfg *config.Config,
-	token auth.TokenService,
-	tokenRepo repository.TokenRepository,
+	tokenScv auth.TokenService,
+	tokenCache cache.TokenCache,
 	log *logger.Logger,
 	authHandler *handler.AuthHandler,
 	teamHandler *handler.TeamHandler,
@@ -44,11 +44,11 @@ func NewServer(
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 
 	server := &Server{
-		app:       app,
-		token:     token,
-		tokenRepo: tokenRepo,
-		log:       log,
-		addr:      addr,
+		app:        app,
+		tokenScv:   tokenScv,
+		tokenCache: tokenCache,
+		log:        log,
+		addr:       addr,
 	}
 
 	server.setupRoutes(authHandler, teamHandler, taskHandler)
@@ -106,7 +106,7 @@ func (s *Server) setupRoutes(
 	auth.Post("/refresh", authHandler.Refresh)
 	auth.Post("/logout", authHandler.Logout)
 
-	protected := api.Group("", middleware.Auth(s.token, s.tokenRepo))
+	protected := api.Group("", middleware.Auth(s.tokenScv, s.tokenCache))
 
 	// Team routes
 	teams := protected.Group("/teams")
