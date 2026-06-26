@@ -98,6 +98,8 @@ func (s *Server) setupRoutes(
 	})
 
 	api := s.app.Group("/api/v1")
+
+	// Auth routes
 	auth := api.Group("/auth")
 	auth.Post("/register", authHandler.Register)
 	auth.Post("/login", authHandler.Login)
@@ -106,6 +108,7 @@ func (s *Server) setupRoutes(
 
 	protected := api.Group("", middleware.Auth(s.token, s.tokenRepo))
 
+	// Team routes
 	teams := protected.Group("/teams")
 	teams.Post("/", teamHandler.Create)
 	teams.Get("/", teamHandler.List)
@@ -114,7 +117,12 @@ func (s *Server) setupRoutes(
 	teams.Patch("/:id/members/:userID/role", teamHandler.ChangeMemberRole)
 	teams.Delete("/:id/members/:userID", teamHandler.RemoveMember)
 
+	// Task routes
 	tasks := protected.Group("/tasks")
 	tasks.Post("/", taskHandler.Create)
 	tasks.Get("/", taskHandler.ListByTeam)
+	tasks.Put("/:id", taskHandler.Update)
+	tasks.Get("/:id/history", taskHandler.GetHistory)
+	tasks.Post("/:id/comments", taskHandler.AddComment)
+	tasks.Get("/:id/comments", taskHandler.ListComments)
 }

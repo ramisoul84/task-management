@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type TaskStatus string
 
@@ -47,4 +50,32 @@ type TaskListResponse struct {
 	Limit   int     `json:"limit"`
 	Offset  int     `json:"offset"`
 	HasMore bool    `json:"has_more"`
+}
+
+type UpdateTaskRequest struct {
+	Title       *string     `json:"title,omitempty" validate:"omitempty,min=3,max=255"`
+	Description *string     `json:"description,omitempty" validate:"omitempty,max=5000"`
+	Status      *TaskStatus `json:"status,omitempty" validate:"omitempty,oneof=todo in_progress done"`
+	AssigneeID  *string     `json:"assignee_id,omitempty" validate:"omitempty,uuid"`
+	Version     int         `json:"version" validate:"required,min=1"`
+}
+
+type CreateCommentRequest struct {
+	Content string `json:"content" validate:"required,min=1,max=5000"`
+}
+
+type TaskComment struct {
+	ID        string    `json:"id" db:"id"`
+	TaskID    string    `json:"task_id" db:"task_id"`
+	UserID    string    `json:"user_id" db:"user_id"`
+	Content   string    `json:"content" db:"content"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
+type TaskHistory struct {
+	ID        int64           `json:"id" db:"id"`
+	TaskID    string          `json:"task_id" db:"task_id"`
+	ChangedBy string          `json:"changed_by" db:"changed_by"`
+	Changes   json.RawMessage `json:"changes" db:"changes"`
+	CreatedAt time.Time       `json:"created_at" db:"created_at"`
 }

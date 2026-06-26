@@ -10,10 +10,18 @@ import (
 )
 
 type RBACService interface {
-	CanInviteMember(ctx context.Context, teamID string, actorID string) error
-	CanChangeMemberRole(ctx context.Context, teamID string, actorID string, targetUserID string, newRole domain.Role) error
-	CanRemoveMember(ctx context.Context, teamID string, actorID string, targetUserID string) error
-	CanCreateTask(ctx context.Context, teamID string, actorID string) error
+	// Team Permissions
+	CanInviteMember(ctx context.Context, teamID, actorID string) error
+	CanChangeMemberRole(ctx context.Context, teamID, actorID, targetUserID string, newRole domain.Role) error
+	CanRemoveMember(ctx context.Context, teamID, actorID, targetUserID string) error
+	CanViewAnalytics(ctx context.Context, teamID, actorID string) error
+
+	// Task Permissions
+	CanCreateTask(ctx context.Context, teamID, actorID string) error
+	CanEditTask(ctx context.Context, teamID, actorID, taskCreatorID string) error
+	CanChangeTaskStatus(ctx context.Context, teamID, actorID, taskCreatorID string, assigneeID *string) error
+	CanReassignTask(ctx context.Context, teamID, actorID, taskCreatorID string) error
+	CanCommentOnTask(ctx context.Context, teamID, actorID string) error
 }
 
 type rbacService struct {
@@ -24,88 +32,41 @@ func NewRBACService(teamRepo repository.TeamRepository) RBACService {
 	return &rbacService{teamRepo: teamRepo}
 }
 
-// CanInviteMember checks if actor can invite new members to team.
-//
-// Permission rules:
-//   - Owner can invite: anyone (as member or admin)
-//   - Admin can invite: anyone (as member only, not admin)
-//   - Member cannot invite anyone
-func (s *rbacService) CanInviteMember(ctx context.Context, teamID string, actorID string) error {
-	const op = "rbac.CanInviteMember"
-
-	actorRole, err := s.teamRepo.GetUserRoleInTeam(ctx, teamID, actorID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return fmt.Errorf("%s: actor is not a team member: %w", op, domain.ErrForbidden)
-		}
-		return fmt.Errorf("%s: get actor role: %w", op, err)
-	}
-
-	if !isOwnerOrAdmin(actorRole) {
-		return domain.ErrForbidden
-	}
-
-	return nil
+// CanInviteMember - Only owner or admin can invite members
+func (s *rbacService) CanInviteMember(ctx context.Context, teamID, actorID string) error {
+	_, err := s.requireOwnerOrAdmin(ctx, teamID, actorID)
+	return err
 }
 
-// CanChangeMemberRole checks if actor can change target user's role.
-//
-// Permission rules:
-//   - Owner can change: member → admin, admin → member (not owner)
-//   - Admin can change: member → admin, admin → member (not admin, not owner)
-//   - Member cannot change anyone's role
-//   - Cannot assign owner role
+// CanChangeMemberRole - Owner can change admin/member roles; Admin can change member roles only
 func (s *rbacService) CanChangeMemberRole(
 	ctx context.Context,
-	teamID string,
-	actorID string,
-	targetUserID string,
+	teamID, actorID, targetUserID string,
 	newRole domain.Role,
 ) error {
-	const op = "rbac.CanChangeMemberRole"
-
-	// Input validation
-	if teamID == "" {
-		return fmt.Errorf("%s: team ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if actorID == "" {
-		return fmt.Errorf("%s: actor ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if targetUserID == "" {
-		return fmt.Errorf("%s: target user ID is required: %w", op, domain.ErrInvalidInput)
-	}
-
-	// Validate new role
+	// Cannot assign owner role
 	if newRole != domain.RoleAdmin && newRole != domain.RoleMember {
-		return fmt.Errorf("%s: invalid role '%s': %w", op, newRole, domain.ErrInvalidInput)
+		return domain.ErrInvalidInput
 	}
 
-	// Prevent self-role-change
+	// Cannot change your own role
 	if actorID == targetUserID {
-		return fmt.Errorf("%s: cannot change your own role: %w", op, domain.ErrInvalidInput)
-	}
-
-	// Get actor's role
-	actorRole, err := s.teamRepo.GetUserRoleInTeam(ctx, teamID, actorID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return fmt.Errorf("%s: actor is not a team member: %w", op, domain.ErrForbidden)
-		}
-		return fmt.Errorf("%s: get actor role: %w", op, err)
+		return domain.ErrInvalidInput
 	}
 
 	// Only owner or admin can change roles
-	if !isOwnerOrAdmin(actorRole) {
-		return domain.ErrForbidden
+	actorRole, err := s.requireOwnerOrAdmin(ctx, teamID, actorID)
+	if err != nil {
+		return err
 	}
 
 	// Get target user's role
 	targetRole, err := s.teamRepo.GetUserRoleInTeam(ctx, teamID, targetUserID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			return fmt.Errorf("%s: target user is not a team member: %w", op, domain.ErrNotFound)
+			return domain.ErrNotFound
 		}
-		return fmt.Errorf("%s: get target role: %w", op, err)
+		return fmt.Errorf("get target role: %w", err)
 	}
 
 	// Owner cannot be modified
@@ -118,65 +79,34 @@ func (s *rbacService) CanChangeMemberRole(
 		return domain.ErrForbidden
 	}
 
-	// Check if role is actually changing
+	// Already has this role
 	if targetRole == newRole {
-		return fmt.Errorf("%s: user already has role '%s': %w", op, newRole, domain.ErrInvalidInput)
+		return domain.ErrInvalidInput
 	}
 
 	return nil
 }
 
-// CanRemoveMember checks if actor can remove target user from team.
-//
-// Permission rules:
-//   - Owner can remove: admin, member (not owner, not self)
-//   - Admin can remove: member (not admin, not owner, not self)
-//   - Member cannot remove anyone
-func (s *rbacService) CanRemoveMember(
-	ctx context.Context,
-	teamID string,
-	actorID string,
-	targetUserID string,
-) error {
-	const op = "rbac.CanRemoveMember"
-
-	// Input validation
-	if teamID == "" {
-		return fmt.Errorf("%s: team ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if actorID == "" {
-		return fmt.Errorf("%s: actor ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if targetUserID == "" {
-		return fmt.Errorf("%s: target user ID is required: %w", op, domain.ErrInvalidInput)
-	}
-
-	// Prevent self-removal
+// CanRemoveMember - Owner can remove admin/member; Admin can remove member only
+func (s *rbacService) CanRemoveMember(ctx context.Context, teamID, actorID, targetUserID string) error {
+	// Cannot remove yourself
 	if actorID == targetUserID {
-		return fmt.Errorf("%s: cannot remove yourself: %w", op, domain.ErrInvalidInput)
-	}
-
-	// Get actor's role (CORRECT: teamID, actorID)
-	actorRole, err := s.teamRepo.GetUserRoleInTeam(ctx, teamID, actorID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return fmt.Errorf("%s: actor is not a team member: %w", op, domain.ErrForbidden)
-		}
-		return fmt.Errorf("%s: get actor role: %w", op, err)
+		return domain.ErrInvalidInput
 	}
 
 	// Only owner or admin can remove members
-	if !isOwnerOrAdmin(actorRole) {
-		return domain.ErrForbidden
+	actorRole, err := s.requireOwnerOrAdmin(ctx, teamID, actorID)
+	if err != nil {
+		return err
 	}
 
-	// Get target user's role (CORRECT: teamID, targetUserID)
+	// Get target user's role
 	targetRole, err := s.teamRepo.GetUserRoleInTeam(ctx, teamID, targetUserID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			return domain.ErrNotFound
 		}
-		return fmt.Errorf("%s: get target role: %w", op, err)
+		return fmt.Errorf("get target role: %w", err)
 	}
 
 	// Owner can never be removed
@@ -184,7 +114,7 @@ func (s *rbacService) CanRemoveMember(
 		return domain.ErrForbidden
 	}
 
-	// Admin cannot remove another admin (only owner can)
+	// Admin cannot remove another admin
 	if actorRole == domain.RoleAdmin && targetRole == domain.RoleAdmin {
 		return domain.ErrForbidden
 	}
@@ -192,25 +122,17 @@ func (s *rbacService) CanRemoveMember(
 	return nil
 }
 
-// CanCreateTask checks if actor can create tasks in team.
-//
-// Permission rules:
-//   - Any team member can create tasks
-func (s *rbacService) CanCreateTask(ctx context.Context, teamID string, actorID string) error {
-	const op = "rbac.CanCreateTask"
+// CanViewAnalytics - Only owner or admin can view analytics
+func (s *rbacService) CanViewAnalytics(ctx context.Context, teamID, actorID string) error {
+	_, err := s.requireOwnerOrAdmin(ctx, teamID, actorID)
+	return err
+}
 
-	// Input validation
-	if teamID == "" {
-		return fmt.Errorf("%s: team ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if actorID == "" {
-		return fmt.Errorf("%s: actor ID is required: %w", op, domain.ErrInvalidInput)
-	}
-
-	// Any team member can create tasks
+// CanCreateTask - Any team member can create tasks
+func (s *rbacService) CanCreateTask(ctx context.Context, teamID, actorID string) error {
 	isMember, err := s.teamRepo.IsTeamMember(ctx, teamID, actorID)
 	if err != nil {
-		return fmt.Errorf("%s: check membership: %w", op, err)
+		return fmt.Errorf("check membership: %w", err)
 	}
 
 	if !isMember {
@@ -218,6 +140,92 @@ func (s *rbacService) CanCreateTask(ctx context.Context, teamID string, actorID 
 	}
 
 	return nil
+}
+
+// CanEditTask - Owner/Admin can edit any task; Creator can edit own task
+func (s *rbacService) CanEditTask(ctx context.Context, teamID, actorID, taskCreatorID string) error {
+	role, err := s.getRole(ctx, teamID, actorID)
+	if err != nil {
+		return err
+	}
+
+	if isOwnerOrAdmin(role) || actorID == taskCreatorID {
+		return nil
+	}
+
+	return domain.ErrForbidden
+}
+
+// CanChangeTaskStatus - Owner/Admin/Creator/Assignee can change status
+func (s *rbacService) CanChangeTaskStatus(
+	ctx context.Context,
+	teamID, actorID, taskCreatorID string,
+	assigneeID *string,
+) error {
+	role, err := s.getRole(ctx, teamID, actorID)
+	if err != nil {
+		return err
+	}
+
+	if isOwnerOrAdmin(role) || actorID == taskCreatorID {
+		return nil
+	}
+
+	if assigneeID != nil && actorID == *assigneeID {
+		return nil
+	}
+
+	return domain.ErrForbidden
+}
+
+// CanReassignTask - Owner/Admin/Creator can reassign; Assignee cannot
+func (s *rbacService) CanReassignTask(ctx context.Context, teamID, actorID, taskCreatorID string) error {
+	role, err := s.getRole(ctx, teamID, actorID)
+	if err != nil {
+		return err
+	}
+
+	if isOwnerOrAdmin(role) || actorID == taskCreatorID {
+		return nil
+	}
+
+	return domain.ErrForbidden
+}
+
+// CanCommentOnTask - Any team member can comment
+func (s *rbacService) CanCommentOnTask(ctx context.Context, teamID, actorID string) error {
+	_, err := s.getRole(ctx, teamID, actorID)
+	return err
+}
+
+// Helpers
+
+// getRole retrieves user's role. Returns ErrForbidden if not a team member.
+func (s *rbacService) getRole(ctx context.Context, teamID, userID string) (domain.Role, error) {
+	role, err := s.teamRepo.GetUserRoleInTeam(ctx, teamID, userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return "", domain.ErrForbidden
+		}
+		return "", fmt.Errorf("get role: %w", err)
+	}
+
+	return role, nil
+}
+
+// requireOwnerOrAdmin checks if user is owner or admin.
+// Returns ErrForbidden if not owner/admin or not a team member.
+func (s *rbacService) requireOwnerOrAdmin(ctx context.Context, teamID, userID string) (domain.Role, error) {
+	role, err := s.getRole(ctx, teamID, userID)
+	if err != nil {
+		return "", err
+	}
+
+	if !isOwnerOrAdmin(role) {
+		return "", domain.ErrForbidden
+	}
+
+	return role, nil
 }
 
 func isOwnerOrAdmin(role domain.Role) bool {
