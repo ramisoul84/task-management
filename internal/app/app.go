@@ -55,13 +55,14 @@ func New(cfg *config.Config) (*App, error) {
 	taskRepo := repository.NewTaskRepository(db)
 
 	// Caches
-	tokenCache := cache.NewTokenRepository(redisCache, cfg.Security.RefreshTokenTTL)
+	tokenCache := cache.NewTokenCache(redisCache, cfg.Security.RefreshTokenTTL)
+	taskCache := cache.NewTaskCache(redisCache, cfg.CacheTTL.TaskListTTL)
 
 	// services
 	authSvc := service.NewAuthService(userRepo, tokenCache, token, hasher, log, cfg.Security.AccessTokenTTL)
 	rbacService := service.NewRBACService(teamRepo)
 	teamSvc := service.NewTeamService(teamRepo, userRepo, rbacService, log)
-	taskSvc := service.NewTaskService(taskRepo, teamRepo, rbacService, log)
+	taskSvc := service.NewTaskService(taskRepo, taskCache, teamRepo, rbacService, log)
 
 	// handlers
 	authHandler := handler.NewAuthHandler(authSvc, requestValidator, cfg.Security)

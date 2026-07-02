@@ -25,7 +25,7 @@ type tokenCache struct {
 	refreshTTL time.Duration
 }
 
-func NewTokenRepository(cache *cache.Cache, refreshTTL time.Duration) TokenCache {
+func NewTokenCache(cache *cache.Cache, refreshTTL time.Duration) TokenCache {
 	return &tokenCache{
 		cache:      cache,
 		refreshTTL: refreshTTL,

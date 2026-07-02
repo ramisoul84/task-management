@@ -10,6 +10,7 @@ type Config struct {
 	DB       DatabaseConfig
 	Cache    RedisConfig
 	Security SecurityConfig
+	CacheTTL CacheTTLConfig
 }
 
 type AppConfig struct {
@@ -73,6 +74,10 @@ type SecurityConfig struct {
 	Cost            int
 }
 
+type CacheTTLConfig struct {
+	TaskListTTL time.Duration
+}
+
 func Load(env string) *Config {
 	loadDotenv(env)
 
@@ -130,6 +135,10 @@ func Load(env string) *Config {
 			RefreshTokenTTL: getEnvDuration("REFRESH_TOKEN_TTL", 24*time.Hour),
 			Issuer:          getEnv("ISSUER", "task-management"),
 			Cost:            getEnvInt("COST", 12),
+		},
+
+		CacheTTL: CacheTTLConfig{
+			TaskListTTL: getEnvDuration("TASK_LIST_TTL", 24*time.Hour),
 		},
 	}
 	return cfg

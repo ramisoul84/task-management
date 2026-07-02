@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ramisoul84/task-management/internal/cache"
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/internal/repository"
 	"github.com/ramisoul84/task-management/pkg/logger"
@@ -23,23 +24,26 @@ type TaskService interface {
 }
 
 type taskService struct {
-	taskRepo repository.TaskRepository
-	teamRepo repository.TeamRepository
-	rbacSvc  RBACService
-	log      *logger.Logger
+	taskRepo  repository.TaskRepository
+	taskCache cache.TaskCache
+	teamRepo  repository.TeamRepository
+	rbacSvc   RBACService
+	log       *logger.Logger
 }
 
 func NewTaskService(
 	taskRepo repository.TaskRepository,
+	taskCache cache.TaskCache,
 	teamRepo repository.TeamRepository,
 	rbacSvc RBACService,
 	log *logger.Logger,
 ) TaskService {
 	return &taskService{
-		taskRepo: taskRepo,
-		teamRepo: teamRepo,
-		rbacSvc:  rbacSvc,
-		log:      log,
+		taskRepo:  taskRepo,
+		taskCache: taskCache,
+		teamRepo:  teamRepo,
+		rbacSvc:   rbacSvc,
+		log:       log,
 	}
 }
 
@@ -120,6 +124,10 @@ func (s *taskService) CreateTask(ctx context.Context, creatorID string, input *d
 		return nil, fmt.Errorf("%s: create task: %w", op, err)
 	}
 
+	if err := s.taskCache.InvalidateTeamTasks(ctx, task.TeamID); err != nil {
+		s.log.Warn().Err(err).Str("op", op).Msg("failed to invalidate cache")
+	}
+
 	s.log.Info().
 		Str("op", op).
 		Str("task_id", task.ID).
@@ -165,6 +173,11 @@ func (s *taskService) ListTasksByTeam(ctx context.Context, userID string, query 
 		return nil, domain.ErrForbidden
 	}
 
+	if cached, found, err := s.taskCache.GetTasks(ctx, query); err == nil && found {
+		s.log.Debug().Str("op", op).Str("team_id", query.TeamID).Msg("cache hit")
+		return cached, nil
+	}
+
 	tasks, err := s.taskRepo.ListByTeam(ctx, query)
 	if err != nil {
 		s.log.Error().
@@ -193,6 +206,11 @@ func (s *taskService) ListTasksByTeam(ctx context.Context, userID string, query 
 		Limit:   query.Limit,
 		Offset:  query.Offset,
 		HasMore: query.Offset+len(tasks) < total,
+	}
+
+	// Cache the result
+	if err := s.taskCache.SetTasks(ctx, query, response); err != nil {
+		s.log.Warn().Err(err).Str("op", op).Msg("failed to cache tasks")
 	}
 
 	return response, nil
@@ -305,6 +323,11 @@ func (s *taskService) UpdateTask(ctx context.Context, userID string, taskID stri
 		}
 		s.log.Error().Err(err).Str("op", op).Str("task_id", taskID).Msg("failed to update task")
 		return nil, fmt.Errorf("%s: update task: %w", op, err)
+	}
+
+	// After creating a task
+	if err := s.taskCache.InvalidateTeamTasks(ctx, currentTask.TeamID); err != nil {
+		s.log.Warn().Err(err).Str("op", op).Msg("failed to invalidate cache")
 	}
 
 	s.log.Info().
