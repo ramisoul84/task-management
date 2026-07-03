@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// TaskStatus represents the status of a task
 type TaskStatus string
 
 const (
@@ -15,67 +16,75 @@ const (
 	TaskStatusCancelled  TaskStatus = "cancelled"
 )
 
+// Task represents a task entity
 type Task struct {
-	ID          string     `json:"id" db:"id"`
-	TeamID      string     `json:"team_id" db:"team_id"`
-	Title       string     `json:"title" db:"title"`
-	Description string     `json:"description,omitempty" db:"description"`
-	Status      TaskStatus `json:"status" db:"status"`
-	CreatedBy   string     `json:"created_by" db:"created_by"`
-	AssigneeID  *string    `json:"assignee_id,omitempty" db:"assignee_id"`
-	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
-	ClosedAt    *time.Time `json:"closed_at,omitempty" db:"closed_at"`
-	Version     int        `json:"version" db:"version"`
+	ID          string     `json:"id" db:"id" example:"123e4567-e89b-12d3-a456-426614174000"`
+	TeamID      string     `json:"team_id" db:"team_id" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Title       string     `json:"title" db:"title" example:"Fix login bug"`
+	Description string     `json:"description,omitempty" db:"description" example:"Users cannot login with Google OAuth"`
+	Status      TaskStatus `json:"status" db:"status" example:"todo"`
+	CreatedBy   string     `json:"created_by" db:"created_by" example:"123e4567-e89b-12d3-a456-426614174002"`
+	AssigneeID  *string    `json:"assignee_id,omitempty" db:"assignee_id" example:"123e4567-e89b-12d3-a456-426614174003"`
+	CreatedAt   time.Time  `json:"created_at" db:"created_at" example:"2024-01-15T10:30:00Z"`
+	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at" example:"2024-01-15T10:30:00Z"`
+	ClosedAt    *time.Time `json:"closed_at,omitempty" db:"closed_at" example:"2024-01-16T15:00:00Z"`
+	Version     int        `json:"version" db:"version" example:"1"`
 }
 
+// CreateTaskRequest represents task creation data
 type CreateTaskRequest struct {
-	TeamID      string  `json:"team_id" validate:"required,uuid"`
-	Title       string  `json:"title" validate:"required,min=3,max=255"`
-	Description string  `json:"description" validate:"omitempty,max=5000"`
-	AssigneeID  *string `json:"assignee_id,omitempty" validate:"omitempty,uuid"`
+	TeamID      string  `json:"team_id" validate:"required,uuid" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Title       string  `json:"title" validate:"required,min=3,max=255" example:"Fix login bug"`
+	Description string  `json:"description" validate:"omitempty,max=5000" example:"Users cannot login with Google OAuth"`
+	AssigneeID  *string `json:"assignee_id,omitempty" validate:"omitempty,uuid" example:"123e4567-e89b-12d3-a456-426614174003"`
 }
 
+// TaskListQuery represents query parameters for listing tasks
 type TaskListQuery struct {
-	TeamID     string     `query:"team_id" validate:"required,uuid"`
-	Status     TaskStatus `query:"status" validate:"omitempty,oneof=todo in_progress review done cancelled"`
-	AssigneeID string     `query:"assignee_id" validate:"omitempty,uuid"`
-	Limit      int        `query:"limit" validate:"omitempty,min=1,max=100"`
-	Offset     int        `query:"offset" validate:"omitempty,min=0"`
+	TeamID     string     `query:"team_id" validate:"required,uuid" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Status     TaskStatus `query:"status" validate:"omitempty,oneof=todo in_progress review done cancelled" example:"todo"`
+	AssigneeID string     `query:"assignee_id" validate:"omitempty,uuid" example:"123e4567-e89b-12d3-a456-426614174003"`
+	Limit      int        `query:"limit" validate:"omitempty,min=1,max=100" example:"20"`
+	Offset     int        `query:"offset" validate:"omitempty,min=0" example:"0"`
 }
 
+// TaskListResponse represents paginated task list
 type TaskListResponse struct {
 	Tasks   []*Task `json:"tasks"`
-	Total   int     `json:"total"`
-	Limit   int     `json:"limit"`
-	Offset  int     `json:"offset"`
-	HasMore bool    `json:"has_more"`
+	Total   int     `json:"total" example:"50"`
+	Limit   int     `json:"limit" example:"20"`
+	Offset  int     `json:"offset" example:"0"`
+	HasMore bool    `json:"has_more" example:"true"`
 }
 
+// UpdateTaskRequest represents task update data
 type UpdateTaskRequest struct {
-	Title       *string     `json:"title,omitempty" validate:"omitempty,min=3,max=255"`
-	Description *string     `json:"description,omitempty" validate:"omitempty,max=5000"`
-	Status      *TaskStatus `json:"status,omitempty" validate:"omitempty,oneof=todo in_progress done"`
-	AssigneeID  *string     `json:"assignee_id,omitempty" validate:"omitempty,uuid"`
-	Version     int         `json:"version" validate:"required,min=1"`
+	Title       *string     `json:"title,omitempty" validate:"omitempty,min=3,max=255" example:"Fix critical login bug"`
+	Description *string     `json:"description,omitempty" validate:"omitempty,max=5000" example:"Users cannot login with Google OAuth on mobile"`
+	Status      *TaskStatus `json:"status,omitempty" validate:"omitempty,oneof=todo in_progress review done cancelled" example:"in_progress"`
+	AssigneeID  *string     `json:"assignee_id,omitempty" validate:"omitempty,uuid" example:"123e4567-e89b-12d3-a456-426614174003"`
+	Version     int         `json:"version" validate:"required,min=1" example:"1"`
 }
 
+// CreateCommentRequest represents comment creation data
 type CreateCommentRequest struct {
-	Content string `json:"content" validate:"required,min=1,max=5000"`
+	Content string `json:"content" validate:"required,min=1,max=5000" example:"This bug is caused by a race condition in the auth flow"`
 }
 
+// TaskComment represents a comment on a task
 type TaskComment struct {
-	ID        string    `json:"id" db:"id"`
-	TaskID    string    `json:"task_id" db:"task_id"`
-	UserID    string    `json:"user_id" db:"user_id"`
-	Content   string    `json:"content" db:"content"`
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	ID        string    `json:"id" db:"id" example:"123e4567-e89b-12d3-a456-426614174004"`
+	TaskID    string    `json:"task_id" db:"task_id" example:"123e4567-e89b-12d3-a456-426614174000"`
+	UserID    string    `json:"user_id" db:"user_id" example:"123e4567-e89b-12d3-a456-426614174002"`
+	Content   string    `json:"content" db:"content" example:"This bug is caused by a race condition"`
+	CreatedAt time.Time `json:"created_at" db:"created_at" example:"2024-01-15T11:00:00Z"`
 }
 
+// TaskHistory represents a change in task history
 type TaskHistory struct {
-	ID        int64           `json:"id" db:"id"`
-	TaskID    string          `json:"task_id" db:"task_id"`
-	ChangedBy string          `json:"changed_by" db:"changed_by"`
+	ID        int64           `json:"id" db:"id" example:"1"`
+	TaskID    string          `json:"task_id" db:"task_id" example:"123e4567-e89b-12d3-a456-426614174000"`
+	ChangedBy string          `json:"changed_by" db:"changed_by" example:"123e4567-e89b-12d3-a456-426614174002"`
 	Changes   json.RawMessage `json:"changes" db:"changes"`
-	CreatedAt time.Time       `json:"created_at" db:"created_at"`
+	CreatedAt time.Time       `json:"created_at" db:"created_at" example:"2024-01-15T11:00:00Z"`
 }

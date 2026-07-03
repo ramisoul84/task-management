@@ -2,6 +2,7 @@ package domain
 
 import "time"
 
+// Role represents user's role in a team
 type Role string
 
 const (
@@ -10,51 +11,57 @@ const (
 	RoleMember Role = "member"
 )
 
+// Team represents a team entity
 type Team struct {
-	ID        string    `json:"id" db:"id"`
-	Name      string    `json:"name" db:"name"`
-	CreatedBy string    `json:"created_by" db:"created_by"`
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	ID        string    `json:"id" db:"id" example:"123e4567-e89b-12d3-a456-426614174000"`
+	Name      string    `json:"name" db:"name" example:"Development Team"`
+	CreatedBy string    `json:"created_by" db:"created_by" example:"123e4567-e89b-12d3-a456-426614174001"`
+	CreatedAt time.Time `json:"created_at" db:"created_at" example:"2024-01-15T10:30:00Z"`
 }
 
+// TeamMember represents a member in a team
 type TeamMember struct {
-	TeamID string `json:"team_id" db:"team_id"`
-	UserID string `json:"user_id" db:"user_id"`
-	Role   Role   `json:"role" db:"role"`
+	TeamID string `json:"team_id" db:"team_id" example:"123e4567-e89b-12d3-a456-426614174000"`
+	UserID string `json:"user_id" db:"user_id" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Role   Role   `json:"role" db:"role" example:"member"`
 }
 
+// CreateTeamRequest represents team creation data
 type CreateTeamRequest struct {
-	Name string `json:"name" validate:"required,min=2,max=255"`
+	Name string `json:"name" validate:"required,min=2,max=255" example:"Development Team"`
 }
 
+// InviteMemberRequest represents member invitation data
 type InviteMemberRequest struct {
-	UserID string `json:"user_id" validate:"required,uuid"`
+	UserID string `json:"user_id" validate:"required,uuid" example:"123e4567-e89b-12d3-a456-426614174001"`
 }
 
+// ChangeMemberRoleRequest represents role change data
 type ChangeMemberRoleRequest struct {
-	Role Role `json:"role" validate:"required,oneof=admin member"`
+	Role Role `json:"role" validate:"required,oneof=admin member" example:"admin"`
 }
 
+// TeamMemberResponse represents team member data returned in responses
 type TeamMemberResponse struct {
-	UserID   string    `json:"user_id"`
-	Email    string    `json:"email"`
-	Name     string    `json:"name"`
-	Role     Role      `json:"role"`
-	JoinedAt time.Time `json:"joined_at"`
+	UserID   string    `json:"user_id" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Email    string    `json:"email" example:"rami@mail.ru"`
+	Name     string    `json:"name" example:"Rami Suliman"`
+	Role     Role      `json:"role" example:"member"`
+	JoinedAt time.Time `json:"joined_at" example:"2024-01-15T10:30:00Z"`
 }
 
 // TeamStats represents team analytics report
 type TeamStats struct {
 	TasksByStatus map[TaskStatus]int `json:"tasks_by_status"`
 	TopPerformers []TopPerformer     `json:"top_performers"`
-	AvgCloseTime  float64            `json:"avg_close_time_hours"`
-	TotalComments int                `json:"total_comments"`
-	TotalTasks    int                `json:"total_tasks"`
+	AvgCloseTime  float64            `json:"avg_close_time_hours" example:"48.5"`
+	TotalComments int                `json:"total_comments" example:"25"`
+	TotalTasks    int                `json:"total_tasks" example:"20"`
 }
 
 // TopPerformer represents a user with closed tasks count
 type TopPerformer struct {
-	UserID      string `json:"user_id" db:"user_id"`
-	UserName    string `json:"user_name" db:"user_name"`
-	ClosedTasks int    `json:"closed_tasks" db:"closed_tasks"`
+	UserID      string `json:"user_id" db:"user_id" example:"123e4567-e89b-12d3-a456-426614174001"`
+	UserName    string `json:"user_name" db:"user_name" example:"John Doe"`
+	ClosedTasks int    `json:"closed_tasks" db:"closed_tasks" example:"6"`
 }

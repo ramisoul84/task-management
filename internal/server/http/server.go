@@ -6,12 +6,15 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	_ "github.com/ramisoul84/task-management/docs"
 	"github.com/ramisoul84/task-management/internal/cache"
 	"github.com/ramisoul84/task-management/internal/config"
+	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/internal/server/http/handler"
 	"github.com/ramisoul84/task-management/internal/server/http/middleware"
 	"github.com/ramisoul84/task-management/pkg/auth"
 	"github.com/ramisoul84/task-management/pkg/logger"
+	swagger "github.com/swaggo/fiber-swagger"
 )
 
 type Server struct {
@@ -51,7 +54,7 @@ func NewServer(
 		addr:       addr,
 	}
 
-	server.setupRoutes(authHandler, teamHandler, taskHandler)
+	server.setupRoutes(cfg.IsDevelopment(), authHandler, teamHandler, taskHandler)
 
 	return server
 }
@@ -67,25 +70,30 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func errorHandler(log *logger.Logger) fiber.ErrorHandler {
 	return func(c *fiber.Ctx, err error) error {
+		code := fiber.StatusInternalServerError
+		message := "internal server error"
+
+		if e, ok := err.(*fiber.Error); ok {
+			code = e.Code
+			message = e.Message
+		}
+
+		// Log error
 		log.Error().
 			Err(err).
 			Str("method", c.Method()).
 			Str("path", c.Path()).
-			Int("status", c.Response().StatusCode()).
+			Int("status", code).
 			Msg("request error")
 
-		code := fiber.StatusInternalServerError
-		if e, ok := err.(*fiber.Error); ok {
-			code = e.Code
-		}
-
-		return c.Status(code).JSON(fiber.Map{
-			"error": err.Error(),
+		return c.Status(code).JSON(domain.ErrorResponse{
+			Error: message,
 		})
 	}
 }
 
 func (s *Server) setupRoutes(
+	dev bool,
 	authHandler *handler.AuthHandler,
 	teamHandler *handler.TeamHandler,
 	taskHandler *handler.TaskHandler,
@@ -96,6 +104,10 @@ func (s *Server) setupRoutes(
 			"time":   time.Now(),
 		})
 	})
+
+	if dev {
+		s.app.Get("/swagger/*", swagger.WrapHandler)
+	}
 
 	api := s.app.Group("/api/v1")
 

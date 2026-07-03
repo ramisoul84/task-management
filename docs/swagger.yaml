@@ -1,0 +1,997 @@
+basePath: /api/v1
+definitions:
+  github_com_ramisoul84_task-management_internal_domain.ChangeMemberRoleRequest:
+    properties:
+      role:
+        allOf:
+        - $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.Role'
+        enum:
+        - admin
+        - member
+        example: admin
+    required:
+    - role
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.CreateCommentRequest:
+    properties:
+      content:
+        example: This bug is caused by a race condition in the auth flow
+        maxLength: 5000
+        minLength: 1
+        type: string
+    required:
+    - content
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.CreateTaskRequest:
+    properties:
+      assignee_id:
+        example: 123e4567-e89b-12d3-a456-426614174003
+        type: string
+      description:
+        example: Users cannot login with Google OAuth
+        maxLength: 5000
+        type: string
+      team_id:
+        example: 123e4567-e89b-12d3-a456-426614174001
+        type: string
+      title:
+        example: Fix login bug
+        maxLength: 255
+        minLength: 3
+        type: string
+    required:
+    - team_id
+    - title
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.CreateTeamRequest:
+    properties:
+      name:
+        example: Development Team
+        maxLength: 255
+        minLength: 2
+        type: string
+    required:
+    - name
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.ErrorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.InviteMemberRequest:
+    properties:
+      user_id:
+        example: 123e4567-e89b-12d3-a456-426614174001
+        type: string
+    required:
+    - user_id
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.LoginRequest:
+    properties:
+      email:
+        example: rami@mail.ru
+        maxLength: 255
+        type: string
+      password:
+        example: StrongPass123!
+        type: string
+    required:
+    - email
+    - password
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.LoginResponse:
+    properties:
+      access_token:
+        example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        type: string
+      expires_in:
+        example: 900
+        type: integer
+      token_type:
+        example: Bearer
+        type: string
+      user:
+        $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.UserResponse'
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.RefreshResponse:
+    properties:
+      access_token:
+        example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        type: string
+      expires_in:
+        example: 900
+        type: integer
+      token_type:
+        example: Bearer
+        type: string
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.RegisterRequest:
+    properties:
+      email:
+        example: rami@mail.ru
+        type: string
+      name:
+        example: Rami Suliman
+        minLength: 2
+        type: string
+      password:
+        example: StrongPass123!
+        minLength: 8
+        type: string
+    required:
+    - email
+    - name
+    - password
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.Role:
+    enum:
+    - owner
+    - admin
+    - member
+    type: string
+    x-enum-varnames:
+    - RoleOwner
+    - RoleAdmin
+    - RoleMember
+  github_com_ramisoul84_task-management_internal_domain.Task:
+    properties:
+      assignee_id:
+        example: 123e4567-e89b-12d3-a456-426614174003
+        type: string
+      closed_at:
+        example: "2024-01-16T15:00:00Z"
+        type: string
+      created_at:
+        example: "2024-01-15T10:30:00Z"
+        type: string
+      created_by:
+        example: 123e4567-e89b-12d3-a456-426614174002
+        type: string
+      description:
+        example: Users cannot login with Google OAuth
+        type: string
+      id:
+        example: 123e4567-e89b-12d3-a456-426614174000
+        type: string
+      status:
+        allOf:
+        - $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskStatus'
+        example: todo
+      team_id:
+        example: 123e4567-e89b-12d3-a456-426614174001
+        type: string
+      title:
+        example: Fix login bug
+        type: string
+      updated_at:
+        example: "2024-01-15T10:30:00Z"
+        type: string
+      version:
+        example: 1
+        type: integer
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.TaskComment:
+    properties:
+      content:
+        example: This bug is caused by a race condition
+        type: string
+      created_at:
+        example: "2024-01-15T11:00:00Z"
+        type: string
+      id:
+        example: 123e4567-e89b-12d3-a456-426614174004
+        type: string
+      task_id:
+        example: 123e4567-e89b-12d3-a456-426614174000
+        type: string
+      user_id:
+        example: 123e4567-e89b-12d3-a456-426614174002
+        type: string
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.TaskHistory:
+    properties:
+      changed_by:
+        example: 123e4567-e89b-12d3-a456-426614174002
+        type: string
+      changes:
+        items:
+          type: integer
+        type: array
+      created_at:
+        example: "2024-01-15T11:00:00Z"
+        type: string
+      id:
+        example: 1
+        type: integer
+      task_id:
+        example: 123e4567-e89b-12d3-a456-426614174000
+        type: string
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.TaskListResponse:
+    properties:
+      has_more:
+        example: true
+        type: boolean
+      limit:
+        example: 20
+        type: integer
+      offset:
+        example: 0
+        type: integer
+      tasks:
+        items:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.Task'
+        type: array
+      total:
+        example: 50
+        type: integer
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.TaskStatus:
+    enum:
+    - todo
+    - in_progress
+    - review
+    - done
+    - cancelled
+    type: string
+    x-enum-varnames:
+    - TaskStatusTodo
+    - TaskStatusInProgress
+    - TaskStatusReview
+    - TaskStatusDone
+    - TaskStatusCancelled
+  github_com_ramisoul84_task-management_internal_domain.Team:
+    properties:
+      created_at:
+        example: "2024-01-15T10:30:00Z"
+        type: string
+      created_by:
+        example: 123e4567-e89b-12d3-a456-426614174001
+        type: string
+      id:
+        example: 123e4567-e89b-12d3-a456-426614174000
+        type: string
+      name:
+        example: Development Team
+        type: string
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.TeamMemberResponse:
+    properties:
+      email:
+        example: rami@mail.ru
+        type: string
+      joined_at:
+        example: "2024-01-15T10:30:00Z"
+        type: string
+      name:
+        example: Rami Suliman
+        type: string
+      role:
+        allOf:
+        - $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.Role'
+        example: member
+      user_id:
+        example: 123e4567-e89b-12d3-a456-426614174001
+        type: string
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.TeamStats:
+    properties:
+      avg_close_time_hours:
+        example: 48.5
+        type: number
+      tasks_by_status:
+        additionalProperties:
+          type: integer
+        type: object
+      top_performers:
+        items:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.TopPerformer'
+        type: array
+      total_comments:
+        example: 25
+        type: integer
+      total_tasks:
+        example: 20
+        type: integer
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.TopPerformer:
+    properties:
+      closed_tasks:
+        example: 6
+        type: integer
+      user_id:
+        example: 123e4567-e89b-12d3-a456-426614174001
+        type: string
+      user_name:
+        example: John Doe
+        type: string
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.UpdateTaskRequest:
+    properties:
+      assignee_id:
+        example: 123e4567-e89b-12d3-a456-426614174003
+        type: string
+      description:
+        example: Users cannot login with Google OAuth on mobile
+        maxLength: 5000
+        type: string
+      status:
+        allOf:
+        - $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskStatus'
+        enum:
+        - todo
+        - in_progress
+        - review
+        - done
+        - cancelled
+        example: in_progress
+      title:
+        example: Fix critical login bug
+        maxLength: 255
+        minLength: 3
+        type: string
+      version:
+        example: 1
+        minimum: 1
+        type: integer
+    required:
+    - version
+    type: object
+  github_com_ramisoul84_task-management_internal_domain.UserResponse:
+    properties:
+      email:
+        example: rami@mail.ru
+        type: string
+      id:
+        example: 123e4567-e89b-12d3-a456-426614174000
+        type: string
+      name:
+        example: Rami Suliman
+        type: string
+    type: object
+host: localhost:8000
+info:
+  contact: {}
+  description: REST API for managing tasks within teams with RBAC
+  title: Task Management API
+  version: "1.0"
+paths:
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticate user with email and password
+      parameters:
+      - description: Login credentials
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Login successful
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.LoginResponse'
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "401":
+          description: Invalid credentials
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      summary: Login user
+      tags:
+      - Auth
+  /auth/logout:
+    post:
+      description: Revoke access token and refresh token
+      responses:
+        "204":
+          description: Logged out successfully
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Logout user
+      tags:
+      - Auth
+  /auth/refresh:
+    post:
+      consumes:
+      - application/json
+      description: Get new access token using refresh token
+      parameters:
+      - description: Refresh token
+        in: body
+        name: refresh_token
+        required: true
+        schema:
+          type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Token refreshed
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.RefreshResponse'
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "401":
+          description: Invalid refresh token
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      summary: Refresh access token
+      tags:
+      - Auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Create a new user account with email and password
+      parameters:
+      - description: Registration details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: User registered successfully
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.UserResponse'
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "409":
+          description: Email already exists
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      summary: Register new user
+      tags:
+      - Auth
+  /tasks:
+    get:
+      description: Get tasks with filters and pagination
+      parameters:
+      - description: Team ID
+        in: query
+        name: team_id
+        required: true
+        type: string
+      - description: Task status
+        enum:
+        - todo
+        - in_progress
+        - review
+        - done
+        - cancelled
+        in: query
+        name: status
+        type: string
+      - description: Assignee ID
+        in: query
+        name: assignee_id
+        type: string
+      - default: 20
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Tasks retrieved
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskListResponse'
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Not team member
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List tasks
+      tags:
+      - Tasks
+    post:
+      consumes:
+      - application/json
+      description: Create a new task in a team
+      parameters:
+      - description: Task details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.CreateTaskRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Task created
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.Task'
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Not team member
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create task
+      tags:
+      - Tasks
+  /tasks/{id}:
+    put:
+      consumes:
+      - application/json
+      description: Update task with permission checks
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Task updates
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.UpdateTaskRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Task updated
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.Task'
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "404":
+          description: Task not found
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "409":
+          description: Version conflict
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Update task
+      tags:
+      - Tasks
+  /tasks/{id}/comments:
+    get:
+      description: Get all comments for a task
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Comments retrieved
+          schema:
+            items:
+              $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskComment'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "404":
+          description: Task not found
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List comments
+      tags:
+      - Tasks
+    post:
+      consumes:
+      - application/json
+      description: Add comment to a task
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Comment content
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.CreateCommentRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Comment added
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskComment'
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "404":
+          description: Task not found
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Add comment
+      tags:
+      - Tasks
+  /tasks/{id}/history:
+    get:
+      description: Get change history for a task
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Task history
+          schema:
+            items:
+              $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskHistory'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "404":
+          description: Task not found
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get task history
+      tags:
+      - Tasks
+  /teams:
+    get:
+      description: Get all teams where current user is a member
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Teams retrieved
+          schema:
+            items:
+              $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.Team'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List user's teams
+      tags:
+      - Teams
+    post:
+      consumes:
+      - application/json
+      description: Create a new team with current user as owner
+      parameters:
+      - description: Team details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.CreateTeamRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Team created successfully
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.Team'
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create team
+      tags:
+      - Teams
+  /teams/{id}/invite:
+    post:
+      consumes:
+      - application/json
+      description: Invite user to team (owner/admin only)
+      parameters:
+      - description: Team ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User to invite
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.InviteMemberRequest'
+      responses:
+        "204":
+          description: Member invited
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "404":
+          description: User not found
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "409":
+          description: Already a member
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Invite member
+      tags:
+      - Teams
+  /teams/{id}/members:
+    get:
+      description: Get all members of a team
+      parameters:
+      - description: Team ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Members retrieved
+          schema:
+            items:
+              $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.TeamMemberResponse'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "404":
+          description: Team not found
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List team members
+      tags:
+      - Teams
+  /teams/{id}/members/{userID}:
+    delete:
+      description: Remove user from team (owner/admin only)
+      parameters:
+      - description: Team ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID
+        in: path
+        name: userID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: Member removed
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "404":
+          description: User not found
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Remove member
+      tags:
+      - Teams
+  /teams/{id}/members/{userID}/role:
+    patch:
+      consumes:
+      - application/json
+      description: Change user's role in team (owner/admin only)
+      parameters:
+      - description: Team ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID
+        in: path
+        name: userID
+        required: true
+        type: string
+      - description: New role
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ChangeMemberRoleRequest'
+      responses:
+        "204":
+          description: Role updated
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "404":
+          description: User not found
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Change member role
+      tags:
+      - Teams
+  /teams/{id}/stats:
+    get:
+      description: Get analytics for team (owner/admin only)
+      parameters:
+      - description: Team ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Team statistics
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.TeamStats'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "404":
+          description: Team not found
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get team statistics
+      tags:
+      - Teams
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

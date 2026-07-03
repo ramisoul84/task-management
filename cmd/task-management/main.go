@@ -12,6 +12,14 @@ import (
 	"github.com/ramisoul84/task-management/pkg/migrator"
 )
 
+// @title Task Management API
+// @version 1.0
+// @description REST API for managing tasks within teams with RBAC
+// @host localhost:8000
+// @BasePath /api/v1
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
 func main() {
 	cfg := config.Load(os.Getenv("APP_ENV"))
 
