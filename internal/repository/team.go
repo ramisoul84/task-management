@@ -20,6 +20,7 @@ type TeamRepository interface {
 	UpdateMemberRole(ctx context.Context, teamID string, actorID string, userID string, role domain.Role) error
 	RemoveMember(ctx context.Context, actorID string, teamID string, userID string) error
 	ListMembers(ctx context.Context, teamID string) ([]*domain.TeamMemberResponse, error)
+	GetTeamStats(ctx context.Context, teamID string) (*domain.TeamStats, error)
 }
 
 type teamRepo struct {
@@ -308,4 +309,124 @@ func (r *teamRepo) ListMembers(ctx context.Context, teamID string) ([]*domain.Te
 	}
 
 	return members, nil
+}
+
+// GetTeamStats retrieves team analytics with a single CTE query
+func (r *teamRepo) GetTeamStats(ctx context.Context, teamID string) (*domain.TeamStats, error) {
+	const op = "teamRepo.GetTeamStats"
+
+	const query = `
+		WITH task_stats AS (
+			SELECT 
+				COUNT(*) AS total_tasks,
+				COALESCE(SUM(CASE WHEN status = 'todo' THEN 1 ELSE 0 END), 0) AS todo_count,
+				COALESCE(SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END), 0) AS in_progress_count,
+				COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
+				COALESCE(AVG(CASE 
+					WHEN status = 'done' AND closed_at IS NOT NULL 
+					THEN TIMESTAMPDIFF(HOUR, created_at, closed_at) 
+				END), 0) AS avg_close_time
+			FROM tasks
+			WHERE team_id = ?
+		),
+		top_performers AS (
+			SELECT 
+				u.id AS user_id,
+				u.name AS user_name,
+				COUNT(t.id) AS closed_tasks
+			FROM tasks t
+			INNER JOIN users u ON u.id = t.assignee_id
+			WHERE t.team_id = ?
+			  AND t.status = 'done'
+			  AND t.closed_at IS NOT NULL
+			  AND t.closed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+			GROUP BY u.id, u.name
+			ORDER BY closed_tasks DESC, u.name ASC
+			LIMIT 3
+		),
+		comment_stats AS (
+			SELECT COUNT(tc.id) AS total_comments
+			FROM task_comments tc
+			INNER JOIN tasks t ON t.id = tc.task_id
+			WHERE t.team_id = ?
+		)
+		SELECT 
+			ts.total_tasks,
+			ts.todo_count,
+			ts.in_progress_count,
+			ts.done_count,
+			ts.avg_close_time,
+			cs.total_comments,
+			tp.user_id,
+			tp.user_name,
+			tp.closed_tasks
+		FROM task_stats ts
+		CROSS JOIN comment_stats cs
+		LEFT JOIN top_performers tp ON TRUE
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, teamID, teamID, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("%s: query stats: %w", op, err)
+	}
+	defer rows.Close()
+
+	stats := &domain.TeamStats{
+		TasksByStatus: make(map[domain.TaskStatus]int),
+		TopPerformers: make([]domain.TopPerformer, 0, 3),
+	}
+
+	for rows.Next() {
+		var (
+			totalTasks    int
+			todoCount     int
+			inProgressCnt int
+			doneCount     int
+			avgCloseTime  sql.NullFloat64
+			totalComments int
+			userID        sql.NullString
+			userName      sql.NullString
+			closedTasks   sql.NullInt64
+		)
+
+		if err := rows.Scan(
+			&totalTasks,
+			&todoCount,
+			&inProgressCnt,
+			&doneCount,
+			&avgCloseTime,
+			&totalComments,
+			&userID,
+			&userName,
+			&closedTasks,
+		); err != nil {
+			return nil, fmt.Errorf("%s: scan stats: %w", op, err)
+		}
+
+		// Set totals (same for every row)
+		stats.TotalTasks = totalTasks
+		stats.TasksByStatus[domain.TaskStatusTodo] = todoCount
+		stats.TasksByStatus[domain.TaskStatusInProgress] = inProgressCnt
+		stats.TasksByStatus[domain.TaskStatusDone] = doneCount
+		stats.TotalComments = totalComments
+
+		if avgCloseTime.Valid {
+			stats.AvgCloseTime = avgCloseTime.Float64
+		}
+
+		// Add top performer if exists
+		if userID.Valid && userName.Valid && closedTasks.Valid {
+			stats.TopPerformers = append(stats.TopPerformers, domain.TopPerformer{
+				UserID:      userID.String,
+				UserName:    userName.String,
+				ClosedTasks: int(closedTasks.Int64),
+			})
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s: rows iteration: %w", op, err)
+	}
+
+	return stats, nil
 }

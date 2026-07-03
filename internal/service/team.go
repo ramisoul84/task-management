@@ -20,6 +20,7 @@ type TeamService interface {
 	ListMembers(ctx context.Context, userID string, teamID string) ([]*domain.TeamMemberResponse, error)
 	ChangeMemberRole(ctx context.Context, actorID string, teamID string, userID string, role domain.Role) error
 	RemoveMember(ctx context.Context, actorID string, teamID string, userID string) error
+	GetTeamStats(ctx context.Context, userID, teamID string) (*domain.TeamStats, error)
 }
 
 type teamService struct {
@@ -305,4 +306,47 @@ func (s *teamService) RemoveMember(
 		Msg("member removed")
 
 	return nil
+}
+
+// GetTeamStats retrieves team analytics (owner/admin only)
+func (s *teamService) GetTeamStats(ctx context.Context, userID string, teamID string) (*domain.TeamStats, error) {
+	const op = "team.GetTeamStats"
+
+	// Input validation
+	if userID == "" {
+		return nil, fmt.Errorf("%s: user ID is required: %w", op, domain.ErrInvalidInput)
+	}
+	if teamID == "" {
+		return nil, fmt.Errorf("%s: team ID is required: %w", op, domain.ErrInvalidInput)
+	}
+
+	// Check permission (owner/admin only)
+	if err := s.rbacSvc.CanViewAnalytics(ctx, teamID, userID); err != nil {
+		s.log.Warn().
+			Err(err).
+			Str("op", op).
+			Str("team_id", teamID).
+			Str("user_id", userID).
+			Msg("RBAC permission check failed")
+		return nil, err
+	}
+
+	// Get stats from repository
+	stats, err := s.teamRepo.GetTeamStats(ctx, teamID)
+	if err != nil {
+		s.log.Error().
+			Err(err).
+			Str("op", op).
+			Str("team_id", teamID).
+			Msg("failed to get team stats")
+		return nil, fmt.Errorf("%s: get team stats: %w", op, err)
+	}
+
+	s.log.Info().
+		Str("op", op).
+		Str("team_id", teamID).
+		Str("user_id", userID).
+		Msg("team stats retrieved")
+
+	return stats, nil
 }

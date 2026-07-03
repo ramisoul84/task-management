@@ -176,3 +176,23 @@ func (h *TeamHandler) RemoveMember(c *fiber.Ctx) error {
 
 	return c.SendStatus(fiber.StatusNoContent)
 }
+
+// GET /api/v1/teams/:id/stats
+func (h *TeamHandler) GetStats(c *fiber.Ctx) error {
+	userID, ok := middleware.UserID(c)
+	if !ok {
+		return fiber.ErrUnauthorized
+	}
+
+	teamID := c.Params("id")
+	if teamID == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "team ID is required")
+	}
+
+	stats, err := h.svc.GetTeamStats(c.UserContext(), userID, teamID)
+	if err != nil {
+		return MapError(err)
+	}
+
+	return c.JSON(stats)
+}

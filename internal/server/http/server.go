@@ -116,6 +116,7 @@ func (s *Server) setupRoutes(
 	teams.Get("/:id/members", teamHandler.ListMembers)
 	teams.Patch("/:id/members/:userID/role", teamHandler.ChangeMemberRole)
 	teams.Delete("/:id/members/:userID", teamHandler.RemoveMember)
+	teams.Get("/:id/stats", teamHandler.GetStats)
 
 	// Task routes
 	tasks := protected.Group("/tasks")
