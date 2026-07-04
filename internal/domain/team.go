@@ -43,11 +43,10 @@ type ChangeMemberRoleRequest struct {
 
 // TeamMemberResponse represents team member data returned in responses
 type TeamMemberResponse struct {
-	UserID   string    `json:"user_id" example:"123e4567-e89b-12d3-a456-426614174001"`
-	Email    string    `json:"email" example:"rami@mail.ru"`
-	Name     string    `json:"name" example:"Rami Suliman"`
-	Role     Role      `json:"role" example:"member"`
-	JoinedAt time.Time `json:"joined_at" example:"2024-01-15T10:30:00Z"`
+	UserID string `json:"user_id" db:"user_id" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Email  string `json:"email" db:"email" example:"rami@mail.ru"`
+	Name   string `json:"name"  db:"name" example:"Rami Suliman"`
+	Role   Role   `json:"role" db:"role" example:"member"`
 }
 
 // TeamStats represents team analytics report

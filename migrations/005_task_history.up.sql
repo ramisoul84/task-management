@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS task_history (
-    id CHAR(36) PRIMARY KEY,
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
     task_id CHAR(36) NOT NULL,
     changed_by CHAR(36) NOT NULL,
     changes JSON NOT NULL,

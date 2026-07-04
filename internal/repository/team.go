@@ -295,12 +295,11 @@ func (r *teamRepo) ListMembers(ctx context.Context, teamID string) ([]*domain.Te
 			u.id AS user_id,
 			u.email,
 			u.name,
-			tm.role,
-			tm.created_at AS joined_at
+			tm.role
 		FROM team_members tm
 		INNER JOIN users u ON u.id = tm.user_id
 		WHERE tm.team_id = ?
-		ORDER BY tm.created_at ASC
+		ORDER BY tm.role, u.name
 	`
 
 	members := make([]*domain.TeamMemberResponse, 0)
