@@ -70,7 +70,7 @@ func New(cfg *config.Config) (*App, error) {
 	taskHandler := handler.NewTaskHandler(taskSvc, requestValidator)
 
 	// Server
-	server := fiberServer.NewServer(cfg, token, tokenCache, log, authHandler, teamHandler, taskHandler)
+	server := fiberServer.NewServer(cfg, token, tokenCache, redisCache.Client, log, authHandler, teamHandler, taskHandler)
 
 	return &App{
 		cfg:        cfg,

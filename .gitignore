@@ -1,8 +1,11 @@
-# Environment files
+# Binary
+/bin/
+*.exe
+
+# Environment
 .env.dev
 .env.prod
 
-#
+# Logs
 logs/
-
-#
+*.log

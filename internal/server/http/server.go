@@ -14,6 +14,7 @@ import (
 	"github.com/ramisoul84/task-management/internal/server/http/middleware"
 	"github.com/ramisoul84/task-management/pkg/auth"
 	"github.com/ramisoul84/task-management/pkg/logger"
+	"github.com/redis/go-redis/v9"
 	swagger "github.com/swaggo/fiber-swagger"
 )
 
@@ -22,13 +23,14 @@ type Server struct {
 	tokenScv   auth.TokenService
 	tokenCache cache.TokenCache
 	log        *logger.Logger
-	addr       string
+	cfg        *config.Config
 }
 
 func NewServer(
 	cfg *config.Config,
 	tokenScv auth.TokenService,
 	tokenCache cache.TokenCache,
+	redisClient *redis.Client,
 	log *logger.Logger,
 	authHandler *handler.AuthHandler,
 	teamHandler *handler.TeamHandler,
@@ -44,23 +46,23 @@ func NewServer(
 		ErrorHandler:          errorHandler(log),
 	})
 
-	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-
 	server := &Server{
 		app:        app,
 		tokenScv:   tokenScv,
 		tokenCache: tokenCache,
 		log:        log,
-		addr:       addr,
+		cfg:        cfg,
 	}
 
+	server.setupMiddleware(cfg, redisClient)
 	server.setupRoutes(cfg.IsDevelopment(), authHandler, teamHandler, taskHandler)
 
 	return server
 }
 
 func (s *Server) Run() error {
-	return s.app.Listen(s.addr)
+	addr := fmt.Sprintf(":%d", s.cfg.Server.Port)
+	return s.app.Listen(addr)
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -92,6 +94,18 @@ func errorHandler(log *logger.Logger) fiber.ErrorHandler {
 	}
 }
 
+// setupMiddleware configures global middleware
+func (s *Server) setupMiddleware(cfg *config.Config, redisClient *redis.Client) {
+	// CORS
+	s.app.Use(middleware.CORS(cfg.Server.AllowedOrigins, cfg.Server.AllowCredentials))
+
+	// Rate limiter
+	rateLimiter := middleware.NewRateLimiter(redisClient)
+
+	// Global rate limit
+	s.app.Use(rateLimiter.GlobalLimit(s.cfg.Server.GlobalRateMax, cfg.Server.GlobalRateWindow))
+}
+
 func (s *Server) setupRoutes(
 	dev bool,
 	authHandler *handler.AuthHandler,
@@ -106,13 +120,16 @@ func (s *Server) setupRoutes(
 	})
 
 	if dev {
-		s.app.Get("/swagger/*", swagger.WrapHandler)
+		s.app.Get("/docs", func(c *fiber.Ctx) error {
+			return c.Redirect("/docs/index.html")
+		})
+		s.app.Get("/docs/*", swagger.WrapHandler)
 	}
 
 	api := s.app.Group("/api/v1")
 
 	// Auth routes
-	auth := api.Group("/auth")
+	auth := api.Group("/auth", middleware.NewRateLimiter(nil).AuthLimit(s.cfg.Server.AuthRateMax, s.cfg.Server.AuthRateWindow))
 	auth.Post("/register", authHandler.Register)
 	auth.Post("/login", authHandler.Login)
 	auth.Post("/refresh", authHandler.Refresh)

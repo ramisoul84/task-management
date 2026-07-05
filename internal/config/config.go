@@ -28,13 +28,18 @@ type LoggerConfig struct {
 
 // ServerConfig holds HTTP server settings
 type ServerConfig struct {
-	Port            int
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	IdleTimeout     time.Duration
-	ShutdownTimeout time.Duration
-	AllowedOrigins  string
-	BodyLimitMB     int
+	Port             int
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	IdleTimeout      time.Duration
+	ShutdownTimeout  time.Duration
+	AllowedOrigins   string
+	AllowCredentials bool
+	BodyLimitMB      int
+	GlobalRateMax    int
+	GlobalRateWindow time.Duration
+	AuthRateMax      int
+	AuthRateWindow   time.Duration
 }
 
 // DatabaseConfig holds MySQL database settings
@@ -95,13 +100,18 @@ func Load(env string) *Config {
 		},
 
 		Server: ServerConfig{
-			Port:            getEnvInt("HTTP_PORT", 8000),
-			ReadTimeout:     getEnvDuration("HTTP_READ_TIMEOUT", 10*time.Second),
-			WriteTimeout:    getEnvDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
-			IdleTimeout:     getEnvDuration("HTTP_IDLE_TIMEOUT", 120*time.Second),
-			ShutdownTimeout: getEnvDuration("HTTP_SHUTDOWN_TIMEOUT", 15*time.Second),
-			AllowedOrigins:  getEnv("ALLOWED_ORIGINS", "*"),
-			BodyLimitMB:     getEnvInt("BODY_LIMIT_MB", 10),
+			Port:             getEnvInt("HTTP_PORT", 8000),
+			ReadTimeout:      getEnvDuration("HTTP_READ_TIMEOUT", 10*time.Second),
+			WriteTimeout:     getEnvDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
+			IdleTimeout:      getEnvDuration("HTTP_IDLE_TIMEOUT", 120*time.Second),
+			ShutdownTimeout:  getEnvDuration("HTTP_SHUTDOWN_TIMEOUT", 15*time.Second),
+			AllowedOrigins:   getEnv("ALLOWED_ORIGINS", "*"),
+			AllowCredentials: getEnvBool("ALLOW_CREDENTIALS", false),
+			BodyLimitMB:      getEnvInt("BODY_LIMIT_MB", 10),
+			GlobalRateMax:    getEnvInt("GLOBAL_RATE_MAX", 100),
+			GlobalRateWindow: getEnvDuration("GLOBAL_RATE_WINDOW", 1*time.Minute),
+			AuthRateMax:      getEnvInt("AUTH_RATE_MAX", 100),
+			AuthRateWindow:   getEnvDuration("AUTH_RATE_WINDOW", 1*time.Minute),
 		},
 
 		DB: DatabaseConfig{
