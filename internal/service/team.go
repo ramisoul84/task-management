@@ -14,11 +14,11 @@ import (
 )
 
 type TeamService interface {
-	CreateTeam(ctx context.Context, userID string, name string) (*domain.Team, error)
+	CreateTeam(ctx context.Context, userID, name string) (*domain.Team, error)
 	ListTeamsByUser(ctx context.Context, userID string) ([]*domain.Team, error)
 	InviteMember(ctx context.Context, actorID string, teamID string, userID string) error
 	ListMembers(ctx context.Context, userID string, teamID string) ([]*domain.TeamMemberResponse, error)
-	ChangeMemberRole(ctx context.Context, actorID string, teamID string, userID string, role domain.Role) error
+	ChangeMemberRole(ctx context.Context, teamID string, actorID string, userID string, role domain.Role) error
 	RemoveMember(ctx context.Context, actorID string, teamID string, userID string) error
 	GetTeamStats(ctx context.Context, userID, teamID string) (*domain.TeamStats, error)
 }

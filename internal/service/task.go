@@ -325,7 +325,7 @@ func (s *taskService) UpdateTask(ctx context.Context, userID string, taskID stri
 		return nil, fmt.Errorf("%s: update task: %w", op, err)
 	}
 
-	// After creating a task
+	// After updating a task
 	if err := s.taskCache.InvalidateTeamTasks(ctx, currentTask.TeamID); err != nil {
 		s.log.Warn().Err(err).Str("op", op).Msg("failed to invalidate cache")
 	}

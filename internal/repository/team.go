@@ -18,7 +18,7 @@ type TeamRepository interface {
 	AddMember(ctx context.Context, member *domain.TeamMember) error
 	IsTeamMember(ctx context.Context, teamID string, userID string) (bool, error)
 	UpdateMemberRole(ctx context.Context, teamID string, actorID string, userID string, role domain.Role) error
-	RemoveMember(ctx context.Context, actorID string, teamID string, userID string) error
+	RemoveMember(ctx context.Context, teamID string, actorID string, targetUserID string) error
 	ListMembers(ctx context.Context, teamID string) ([]*domain.TeamMemberResponse, error)
 	GetTeamStats(ctx context.Context, teamID string) (*domain.TeamStats, error)
 }
