@@ -9,8 +9,6 @@ import (
 	"github.com/ramisoul84/task-management/internal/service"
 )
 
-var errRepoFailure = errors.New("repo failure")
-
 func TestRBAC_CanInviteMember(t *testing.T) {
 	ctx := context.Background()
 
