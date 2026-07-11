@@ -3,6 +3,7 @@
 *.exe
 
 # Environment
+.env
 .env.dev
 .env.prod
 

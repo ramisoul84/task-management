@@ -13,11 +13,11 @@ import (
 
 // loadDotenv loads the appropriate .env file based on the current environment.
 func loadDotenv(env string) {
-	file := ".env.dev"
 	if strings.ToLower(env) == "production" {
-		file = ".env.prod"
+		return
 	}
 
+	file := ".env.dev"
 	if err := godotenv.Load(file); err != nil {
 		log.Printf("warning: could not load %s: %v", file, err)
 	}

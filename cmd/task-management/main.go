@@ -15,7 +15,7 @@ import (
 // @title Task Management API
 // @version 1.0
 // @description REST API for managing tasks within teams with RBAC
-// @host localhost:8000
+// @host localhost:8080
 // @BasePath /api/v1
 // @securityDefinitions.apikey BearerAuth
 // @in header

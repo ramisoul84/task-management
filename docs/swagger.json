@@ -6,7 +6,7 @@
         "contact": {},
         "version": "1.0"
     },
-    "host": "localhost:8000",
+    "host": "localhost:8080",
     "basePath": "/api/v1",
     "paths": {
         "/auth/login": {
@@ -1358,10 +1358,6 @@
                 "email": {
                     "type": "string",
                     "example": "rami@mail.ru"
-                },
-                "joined_at": {
-                    "type": "string",
-                    "example": "2024-01-15T10:30:00Z"
                 },
                 "name": {
                     "type": "string",

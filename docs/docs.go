@@ -1365,10 +1365,6 @@ const docTemplate = `{
                     "type": "string",
                     "example": "rami@mail.ru"
                 },
-                "joined_at": {
-                    "type": "string",
-                    "example": "2024-01-15T10:30:00Z"
-                },
                 "name": {
                     "type": "string",
                     "example": "Rami Suliman"
@@ -1506,7 +1502,7 @@ const docTemplate = `{
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
-	Host:             "localhost:8000",
+	Host:             "localhost:8080",
 	BasePath:         "/api/v1",
 	Schemes:          []string{},
 	Title:            "Task Management API",

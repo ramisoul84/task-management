@@ -260,9 +260,6 @@ definitions:
       email:
         example: rami@mail.ru
         type: string
-      joined_at:
-        example: "2024-01-15T10:30:00Z"
-        type: string
       name:
         example: Rami Suliman
         type: string
@@ -349,7 +346,7 @@ definitions:
         example: Rami Suliman
         type: string
     type: object
-host: localhost:8000
+host: localhost:8080
 info:
   contact: {}
   description: REST API for managing tasks within teams with RBAC

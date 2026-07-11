@@ -19,11 +19,12 @@ import (
 )
 
 type Server struct {
-	app        *fiber.App
-	tokenScv   auth.TokenService
-	tokenCache cache.TokenCache
-	log        *logger.Logger
-	cfg        *config.Config
+	app         *fiber.App
+	tokenScv    auth.TokenService
+	tokenCache  cache.TokenCache
+	log         *logger.Logger
+	cfg         *config.Config
+	rateLimiter *middleware.RateLimiter
 }
 
 func NewServer(
@@ -46,16 +47,20 @@ func NewServer(
 		ErrorHandler:          errorHandler(log),
 	})
 
+	// Create rate limiter once
+	rateLimiter := middleware.NewRateLimiter(redisClient)
+
 	server := &Server{
-		app:        app,
-		tokenScv:   tokenScv,
-		tokenCache: tokenCache,
-		log:        log,
-		cfg:        cfg,
+		app:         app,
+		tokenScv:    tokenScv,
+		tokenCache:  tokenCache,
+		log:         log,
+		cfg:         cfg,
+		rateLimiter: rateLimiter,
 	}
 
-	server.setupMiddleware(cfg, redisClient)
-	server.setupRoutes(cfg.IsDevelopment(), authHandler, teamHandler, taskHandler)
+	server.setupMiddleware()
+	server.setupRoutes(authHandler, teamHandler, taskHandler)
 
 	return server
 }
@@ -80,7 +85,6 @@ func errorHandler(log *logger.Logger) fiber.ErrorHandler {
 			message = e.Message
 		}
 
-		// Log error
 		log.Error().
 			Err(err).
 			Str("method", c.Method()).
@@ -95,23 +99,20 @@ func errorHandler(log *logger.Logger) fiber.ErrorHandler {
 }
 
 // setupMiddleware configures global middleware
-func (s *Server) setupMiddleware(cfg *config.Config, redisClient *redis.Client) {
+func (s *Server) setupMiddleware() {
 	// CORS
-	s.app.Use(middleware.CORS(cfg.Server.AllowedOrigins, cfg.Server.AllowCredentials))
-
-	// Rate limiter
-	rateLimiter := middleware.NewRateLimiter(redisClient)
+	s.app.Use(middleware.CORS(s.cfg.Server.AllowedOrigins, s.cfg.Server.AllowCredentials))
 
 	// Global rate limit
-	s.app.Use(rateLimiter.GlobalLimit(s.cfg.Server.GlobalRateMax, cfg.Server.GlobalRateWindow))
+	s.app.Use(s.rateLimiter.GlobalLimit(s.cfg.Server.GlobalRateMax, s.cfg.Server.GlobalRateWindow))
 }
 
 func (s *Server) setupRoutes(
-	dev bool,
 	authHandler *handler.AuthHandler,
 	teamHandler *handler.TeamHandler,
 	taskHandler *handler.TaskHandler,
 ) {
+	// Health check
 	s.app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"status": "ok",
@@ -119,22 +120,22 @@ func (s *Server) setupRoutes(
 		})
 	})
 
-	if dev {
-		s.app.Get("/docs", func(c *fiber.Ctx) error {
-			return c.Redirect("/docs/index.html")
-		})
-		s.app.Get("/docs/*", swagger.WrapHandler)
-	}
+	// Docs
+	s.app.Get("/docs", func(c *fiber.Ctx) error {
+		return c.Redirect("/docs/index.html")
+	})
+	s.app.Get("/docs/*", swagger.WrapHandler)
 
 	api := s.app.Group("/api/v1")
 
-	// Auth routes
-	auth := api.Group("/auth", middleware.NewRateLimiter(nil).AuthLimit(s.cfg.Server.AuthRateMax, s.cfg.Server.AuthRateWindow))
+	// Auth routes with stricter rate limit (use s.rateLimiter)
+	auth := api.Group("/auth", s.rateLimiter.AuthLimit(s.cfg.Server.AuthRateMax, s.cfg.Server.AuthRateWindow))
 	auth.Post("/register", authHandler.Register)
 	auth.Post("/login", authHandler.Login)
 	auth.Post("/refresh", authHandler.Refresh)
 	auth.Post("/logout", authHandler.Logout)
 
+	// Protected routes
 	protected := api.Group("", middleware.Auth(s.tokenScv, s.tokenCache))
 
 	// Team routes

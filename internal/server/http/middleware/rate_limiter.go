@@ -29,10 +29,16 @@ func (r *RateLimiter) AuthLimit(max int, window time.Duration) fiber.Handler {
 // limit creates a rate limiter for a specific group
 func (r *RateLimiter) limit(group string, max int, window time.Duration) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		// Fail open if Redis is nil or unreachable
+		if r.redis == nil {
+			return c.Next()
+		}
+
 		key := fmt.Sprintf("rate:%s:%s", group, c.IP())
 
 		count, err := r.increment(c, key, window)
 		if err != nil {
+			// Fail open on Redis error
 			return c.Next()
 		}
 
