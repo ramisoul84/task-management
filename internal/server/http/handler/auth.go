@@ -157,7 +157,8 @@ func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
 // @Summary Logout user
 // @Description Revoke access token and refresh token
 // @Tags Auth
-// @Security BearerAuth
+// @Accept json
+// @Produce json
 // @Success 204 "Logged out successfully"
 // @Failure 401 {object} domain.ErrorResponse "Unauthorized"
 // @Failure 500 {object} domain.ErrorResponse "Internal server error"

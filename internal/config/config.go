@@ -148,7 +148,7 @@ func Load(env string) *Config {
 		},
 
 		CacheTTL: CacheTTLConfig{
-			TaskListTTL: getEnvDuration("TASK_LIST_TTL", 24*time.Hour),
+			TaskListTTL: getEnvDuration("CACHE_TASK_LIST_TTL", 5*time.Minute),
 		},
 	}
 	return cfg
