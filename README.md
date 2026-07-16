@@ -2,6 +2,12 @@
 
 REST API for team-based task management with role-based access control, built with Go.
 
+## Live Demo
+
+🚀 **Test the API live**: [Task Management Site](https://ramisoul84.github.io/task-management-site/)
+
+The frontend is deployed on GitHub Pages and connects to this API at `https://ramisuliman.com/tm-api`.
+
 ## Features
 
 - JWT auth with refresh token rotation
