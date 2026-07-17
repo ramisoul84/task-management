@@ -23,6 +23,8 @@ func Logger(log *logger.Logger) fiber.Handler {
 			c.SetUserContext(ctx)
 		}
 
+		c.Locals("start_time", start)
+
 		log.Info().
 			Str("request_id", requestID).
 			Str("method", c.Method()).
@@ -32,17 +34,9 @@ func Logger(log *logger.Logger) fiber.Handler {
 
 		err := c.Next()
 
-		duration := time.Since(start)
-
-		if c.Response().StatusCode() >= 400 {
-			log.Error().
-				Str("request_id", requestID).
-				Str("method", c.Method()).
-				Str("path", c.Path()).
-				Int("status", c.Response().StatusCode()).
-				Dur("duration_ms", duration).
-				Msg("request failed")
-		} else {
+		// Only log success here (err == nil)
+		if err == nil {
+			duration := time.Since(start)
 			log.Info().
 				Str("request_id", requestID).
 				Str("method", c.Method()).

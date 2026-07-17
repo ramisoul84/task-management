@@ -85,12 +85,18 @@ func errorHandler(log *logger.Logger) fiber.ErrorHandler {
 			message = e.Message
 		}
 
+		requestID, _ := c.Locals(domain.RequestIDKey).(string)
+		startTime, _ := c.Locals("start_time").(time.Time)
+		duration := time.Since(startTime)
+
 		log.Error().
 			Err(err).
+			Str("request_id", requestID).
 			Str("method", c.Method()).
 			Str("path", c.Path()).
 			Int("status", code).
-			Msg("request error")
+			Dur("duration_ms", duration).
+			Msg("request failed")
 
 		return c.Status(code).JSON(domain.ErrorResponse{
 			Error: message,
