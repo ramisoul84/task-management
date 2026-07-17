@@ -46,10 +46,17 @@ func NewTeamService(
 
 func (s *teamService) CreateTeam(ctx context.Context, ownerID, teamName string) (*domain.Team, error) {
 	const op = "teamService.CreateTeam"
+	requestID := logger.RequestIDFromContext(ctx)
 
 	teamName = strings.ToUpper(strings.TrimSpace(teamName))
 
 	if ownerID == "" || teamName == "" {
+		s.log.Warn().
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("owner_id", ownerID).
+			Str("team_name", teamName).
+			Msg("create team failed: invalid input")
 		return nil, domain.ErrInvalidInput
 	}
 
@@ -63,25 +70,35 @@ func (s *teamService) CreateTeam(ctx context.Context, ownerID, teamName string) 
 	if err := s.teamRepo.CreateWithOwner(ctx, team); err != nil {
 		s.log.Error().
 			Err(err).
+			Str("request_id", requestID).
+			Str("op", op).
 			Str("team_id", team.ID).
-			Str("user_id", ownerID).
-			Msg("create team")
-
-		return nil, fmt.Errorf("%s: %w", op, err)
+			Str("owner_id", ownerID).
+			Str("team_name", teamName).
+			Msg("create team failed")
+		return nil, fmt.Errorf("%s: create team: %w", op, err)
 	}
 
 	s.log.Info().
+		Str("request_id", requestID).
+		Str("op", op).
 		Str("team_id", team.ID).
-		Str("user_id", ownerID).
-		Msg("team created")
+		Str("owner_id", ownerID).
+		Str("team_name", teamName).
+		Msg("team created successfully")
 
 	return team, nil
 }
 
 func (s *teamService) ListTeamsByUser(ctx context.Context, userID string) ([]*domain.Team, error) {
 	const op = "teamService.ListTeamsByUser"
+	requestID := logger.RequestIDFromContext(ctx)
 
 	if userID == "" {
+		s.log.Warn().
+			Str("request_id", requestID).
+			Str("op", op).
+			Msg("list teams failed: empty user ID")
 		return nil, domain.ErrInvalidInput
 	}
 
@@ -89,11 +106,19 @@ func (s *teamService) ListTeamsByUser(ctx context.Context, userID string) ([]*do
 	if err != nil {
 		s.log.Error().
 			Err(err).
+			Str("request_id", requestID).
+			Str("op", op).
 			Str("user_id", userID).
-			Msg("list teams")
-
-		return nil, fmt.Errorf("%s: %w", op, err)
+			Msg("list teams failed")
+		return nil, fmt.Errorf("%s: list teams: %w", op, err)
 	}
+
+	s.log.Info().
+		Str("request_id", requestID).
+		Str("op", op).
+		Str("user_id", userID).
+		Int("teams_count", len(teams)).
+		Msg("teams listed successfully")
 
 	return teams, nil
 }
@@ -104,14 +129,26 @@ func (s *teamService) InviteMember(
 	teamID string,
 	userID string,
 ) error {
-	const op = "team.InviteMember"
+	const op = "teamService.InviteMember"
+	requestID := logger.RequestIDFromContext(ctx)
 
 	if actorID == "" || teamID == "" || userID == "" {
-		return fmt.Errorf("%s: actor, team and user IDs are required: %w",
-			op, domain.ErrInvalidInput)
+		s.log.Warn().
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("actor_id", actorID).
+			Str("team_id", teamID).
+			Str("invited_user_id", userID).
+			Msg("invite failed: invalid input")
+		return fmt.Errorf("%s: actor, team and user IDs are required: %w", op, domain.ErrInvalidInput)
 	}
 
 	if actorID == userID {
+		s.log.Warn().
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("actor_id", actorID).
+			Msg("invite failed: cannot invite yourself")
 		return fmt.Errorf("%s: cannot invite yourself: %w", op, domain.ErrInvalidInput)
 	}
 
@@ -119,10 +156,11 @@ func (s *teamService) InviteMember(
 	if err := s.rbacSvc.CanInviteMember(ctx, teamID, actorID); err != nil {
 		s.log.Warn().
 			Err(err).
+			Str("request_id", requestID).
 			Str("op", op).
 			Str("team_id", teamID).
 			Str("actor_id", actorID).
-			Msg("RBAC permission check failed")
+			Msg("invite failed: permission denied")
 		return err
 	}
 
@@ -130,13 +168,21 @@ func (s *teamService) InviteMember(
 	_, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
+			s.log.Warn().
+				Str("request_id", requestID).
+				Str("op", op).
+				Str("team_id", teamID).
+				Str("invited_user_id", userID).
+				Msg("invite failed: user not found")
 			return domain.ErrNotFound
 		}
 		s.log.Error().
 			Err(err).
+			Str("request_id", requestID).
 			Str("op", op).
-			Str("user_id", userID).
-			Msg("get user")
+			Str("team_id", teamID).
+			Str("invited_user_id", userID).
+			Msg("get user failed")
 		return fmt.Errorf("%s: get user: %w", op, err)
 	}
 
@@ -145,14 +191,21 @@ func (s *teamService) InviteMember(
 	if err != nil {
 		s.log.Error().
 			Err(err).
+			Str("request_id", requestID).
 			Str("op", op).
 			Str("team_id", teamID).
-			Str("user_id", userID).
-			Msg("check membership")
+			Str("invited_user_id", userID).
+			Msg("check membership failed")
 		return fmt.Errorf("%s: check membership: %w", op, err)
 	}
 
 	if isMember {
+		s.log.Warn().
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("team_id", teamID).
+			Str("invited_user_id", userID).
+			Msg("invite failed: user already a member")
 		return domain.ErrAlreadyExists
 	}
 
@@ -166,44 +219,79 @@ func (s *teamService) InviteMember(
 	if err := s.teamRepo.AddMember(ctx, member); err != nil {
 		s.log.Error().
 			Err(err).
+			Str("request_id", requestID).
 			Str("op", op).
 			Str("team_id", teamID).
-			Str("user_id", userID).
-			Msg("add member")
+			Str("invited_user_id", userID).
+			Msg("add member failed")
 		return fmt.Errorf("%s: add member: %w", op, err)
 	}
 
 	s.log.Info().
+		Str("request_id", requestID).
 		Str("op", op).
 		Str("team_id", teamID).
 		Str("actor_id", actorID).
-		Str("new_member_id", userID).
-		Msg("member invited")
+		Str("invited_user_id", userID).
+		Msg("member invited successfully")
 
 	return nil
 }
 
 func (s *teamService) ListMembers(ctx context.Context, userID string, teamID string) ([]*domain.TeamMemberResponse, error) {
-	const op = "team.ListMembers"
+	const op = "teamService.ListMembers"
+	requestID := logger.RequestIDFromContext(ctx)
 
 	if userID == "" || teamID == "" {
+		s.log.Warn().
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("user_id", userID).
+			Str("team_id", teamID).
+			Msg("list members failed: invalid input")
 		return nil, fmt.Errorf("%s: user ID and team ID are required: %w", op, domain.ErrInvalidInput)
 	}
 
 	isMember, err := s.teamRepo.IsTeamMember(ctx, teamID, userID)
 	if err != nil {
-		s.log.Error().Err(err).Str("op", op).Str("team_id", teamID).Str("user_id", userID).Msg("check membership")
+		s.log.Error().
+			Err(err).
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("team_id", teamID).
+			Str("user_id", userID).
+			Msg("check membership failed")
 		return nil, fmt.Errorf("%s: check membership: %w", op, err)
 	}
+
 	if !isMember {
+		s.log.Warn().
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("team_id", teamID).
+			Str("user_id", userID).
+			Msg("list members failed: not team member")
 		return nil, domain.ErrForbidden
 	}
 
 	members, err := s.teamRepo.ListMembers(ctx, teamID)
 	if err != nil {
-		s.log.Error().Err(err).Str("op", op).Str("team_id", teamID).Msg("list members")
+		s.log.Error().
+			Err(err).
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("team_id", teamID).
+			Msg("list members failed")
 		return nil, fmt.Errorf("%s: list members: %w", op, err)
 	}
+
+	s.log.Info().
+		Str("request_id", requestID).
+		Str("op", op).
+		Str("team_id", teamID).
+		Str("user_id", userID).
+		Int("members_count", len(members)).
+		Msg("members listed successfully")
 
 	return members, nil
 }
@@ -215,22 +303,30 @@ func (s *teamService) ChangeMemberRole(
 	targetUserID string,
 	role domain.Role,
 ) error {
-	const op = "team.ChangeMemberRole"
+	const op = "teamService.ChangeMemberRole"
+	requestID := logger.RequestIDFromContext(ctx)
 
 	if actorID == "" || teamID == "" || targetUserID == "" {
-		return fmt.Errorf("%s: actor, team and target user IDs are required: %w",
-			op, domain.ErrInvalidInput)
+		s.log.Warn().
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("actor_id", actorID).
+			Str("team_id", teamID).
+			Str("target_user_id", targetUserID).
+			Msg("change role failed: invalid input")
+		return fmt.Errorf("%s: actor, team and target user IDs are required: %w", op, domain.ErrInvalidInput)
 	}
 
 	if err := s.rbacSvc.CanChangeMemberRole(ctx, teamID, actorID, targetUserID, role); err != nil {
 		s.log.Warn().
 			Err(err).
+			Str("request_id", requestID).
 			Str("op", op).
 			Str("team_id", teamID).
 			Str("actor_id", actorID).
 			Str("target_user_id", targetUserID).
 			Str("new_role", string(role)).
-			Msg("RBAC permission check failed")
+			Msg("change role failed: permission denied")
 		return err
 	}
 
@@ -238,22 +334,24 @@ func (s *teamService) ChangeMemberRole(
 	if err := s.teamRepo.UpdateMemberRole(ctx, teamID, actorID, targetUserID, role); err != nil {
 		s.log.Error().
 			Err(err).
+			Str("request_id", requestID).
 			Str("op", op).
 			Str("team_id", teamID).
 			Str("actor_id", actorID).
 			Str("target_user_id", targetUserID).
 			Str("new_role", string(role)).
-			Msg("update member role")
+			Msg("change role failed: update member role")
 		return fmt.Errorf("%s: update member role: %w", op, err)
 	}
 
 	s.log.Info().
+		Str("request_id", requestID).
 		Str("op", op).
 		Str("team_id", teamID).
 		Str("actor_id", actorID).
 		Str("target_user_id", targetUserID).
 		Str("new_role", string(role)).
-		Msg("member role updated")
+		Msg("member role updated successfully")
 
 	return nil
 }
@@ -264,24 +362,31 @@ func (s *teamService) RemoveMember(
 	teamID string,
 	targetUserID string,
 ) error {
-	const op = "team.RemoveMember"
+	const op = "teamService.RemoveMember"
+	requestID := logger.RequestIDFromContext(ctx)
 
 	// Input validation
 	if actorID == "" || teamID == "" || targetUserID == "" {
-		return fmt.Errorf("%s: actor, team and target user IDs are required: %w",
-			op, domain.ErrInvalidInput)
+		s.log.Warn().
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("actor_id", actorID).
+			Str("team_id", teamID).
+			Str("target_user_id", targetUserID).
+			Msg("remove member failed: invalid input")
+		return fmt.Errorf("%s: actor, team and target user IDs are required: %w", op, domain.ErrInvalidInput)
 	}
 
 	// Check permission via RBAC
 	if err := s.rbacSvc.CanRemoveMember(ctx, teamID, actorID, targetUserID); err != nil {
-		// Log RBAC failure
 		s.log.Warn().
 			Err(err).
+			Str("request_id", requestID).
 			Str("op", op).
 			Str("team_id", teamID).
 			Str("actor_id", actorID).
 			Str("target_user_id", targetUserID).
-			Msg("RBAC permission check failed")
+			Msg("remove member failed: permission denied")
 		return err
 	}
 
@@ -289,45 +394,52 @@ func (s *teamService) RemoveMember(
 	if err := s.teamRepo.RemoveMember(ctx, teamID, actorID, targetUserID); err != nil {
 		s.log.Error().
 			Err(err).
+			Str("request_id", requestID).
 			Str("op", op).
 			Str("team_id", teamID).
 			Str("actor_id", actorID).
 			Str("target_user_id", targetUserID).
-			Msg("remove member")
+			Msg("remove member failed")
 		return fmt.Errorf("%s: remove member: %w", op, err)
 	}
 
 	// Success log
 	s.log.Info().
+		Str("request_id", requestID).
 		Str("op", op).
 		Str("team_id", teamID).
 		Str("actor_id", actorID).
 		Str("removed_user_id", targetUserID).
-		Msg("member removed")
+		Msg("member removed successfully")
 
 	return nil
 }
 
 // GetTeamStats retrieves team analytics (owner/admin only)
 func (s *teamService) GetTeamStats(ctx context.Context, userID string, teamID string) (*domain.TeamStats, error) {
-	const op = "team.GetTeamStats"
+	const op = "teamService.GetTeamStats"
+	requestID := logger.RequestIDFromContext(ctx)
 
 	// Input validation
-	if userID == "" {
-		return nil, fmt.Errorf("%s: user ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if teamID == "" {
-		return nil, fmt.Errorf("%s: team ID is required: %w", op, domain.ErrInvalidInput)
+	if userID == "" || teamID == "" {
+		s.log.Warn().
+			Str("request_id", requestID).
+			Str("op", op).
+			Str("user_id", userID).
+			Str("team_id", teamID).
+			Msg("get team stats failed: invalid input")
+		return nil, fmt.Errorf("%s: user ID and team ID are required: %w", op, domain.ErrInvalidInput)
 	}
 
 	// Check permission (owner/admin only)
 	if err := s.rbacSvc.CanViewAnalytics(ctx, teamID, userID); err != nil {
 		s.log.Warn().
 			Err(err).
+			Str("request_id", requestID).
 			Str("op", op).
 			Str("team_id", teamID).
 			Str("user_id", userID).
-			Msg("RBAC permission check failed")
+			Msg("get team stats failed: permission denied")
 		return nil, err
 	}
 
@@ -336,17 +448,21 @@ func (s *teamService) GetTeamStats(ctx context.Context, userID string, teamID st
 	if err != nil {
 		s.log.Error().
 			Err(err).
+			Str("request_id", requestID).
 			Str("op", op).
 			Str("team_id", teamID).
-			Msg("failed to get team stats")
+			Msg("get team stats failed")
 		return nil, fmt.Errorf("%s: get team stats: %w", op, err)
 	}
 
 	s.log.Info().
+		Str("request_id", requestID).
 		Str("op", op).
 		Str("team_id", teamID).
 		Str("user_id", userID).
-		Msg("team stats retrieved")
+		Int("total_tasks", stats.TotalTasks).
+		Int("total_comments", stats.TotalComments).
+		Msg("team stats retrieved successfully")
 
 	return stats, nil
 }

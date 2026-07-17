@@ -103,6 +103,10 @@ func (s *Server) setupMiddleware() {
 	// CORS
 	s.app.Use(middleware.CORS(s.cfg.Server.AllowedOrigins, s.cfg.Server.AllowCredentials))
 
+	s.app.Use(middleware.RequestID())
+
+	s.app.Use(middleware.Logger(s.log))
+
 	// Global rate limit
 	s.app.Use(s.rateLimiter.GlobalLimit(s.cfg.Server.GlobalRateMax, s.cfg.Server.GlobalRateWindow))
 }
