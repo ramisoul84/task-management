@@ -289,8 +289,10 @@ func (r *taskRepo) UpdateWithHistory(
 		return nil, fmt.Errorf("%s: no rows updated: %w", op, domain.ErrConflict)
 	}
 
-	// Record history
-	changesJSON, err := json.Marshal(updates)
+	// Record an auditable before/after snapshot. Storing only the submitted
+	// value makes it impossible to reconstruct what changed once the task has
+	// been updated.
+	changesJSON, err := json.Marshal(historyChanges(currentTask, updates))
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal changes: %w", op, err)
 	}
@@ -316,6 +318,38 @@ func (r *taskRepo) UpdateWithHistory(
 	}
 
 	return updatedTask, nil
+}
+
+// historyChanges converts requested column updates into the public history
+// format: {"field":{"old":...,"new":...}}. It is deliberately built from
+// the row locked inside the transaction, so the "old" values always match the
+// state from which the update was applied.
+func historyChanges(task domain.Task, updates map[string]interface{}) map[string]map[string]interface{} {
+	changes := make(map[string]map[string]interface{}, len(updates))
+
+	for field, newValue := range updates {
+		var oldValue interface{}
+		switch field {
+		case "title":
+			oldValue = task.Title
+		case "description":
+			oldValue = task.Description
+		case "status":
+			oldValue = task.Status
+		case "assignee_id":
+			oldValue = task.AssigneeID
+		case "closed_at":
+			oldValue = task.ClosedAt
+		default:
+			// All update keys are controlled by this repository. Keeping this
+			// guard prevents an accidental new key from producing misleading
+			// audit data.
+			continue
+		}
+		changes[field] = map[string]interface{}{"old": oldValue, "new": newValue}
+	}
+
+	return changes
 }
 
 // GetHistory - retrieves task change history

@@ -40,7 +40,7 @@ func NewAuthHandler(svc service.AuthService, validator *validator.Validator, cfg
 // @Failure 400 {object} domain.ErrorResponse "Validation error"
 // @Failure 409 {object} domain.ErrorResponse "Email already exists"
 // @Failure 500 {object} domain.ErrorResponse "Internal server error"
-// @Router /auth/register [post]
+// @Router /register [post]
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	var req domain.RegisterRequest
 
@@ -81,7 +81,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 // @Failure 400 {object} domain.ErrorResponse "Validation error"
 // @Failure 401 {object} domain.ErrorResponse "Invalid credentials"
 // @Failure 500 {object} domain.ErrorResponse "Internal server error"
-// @Router /auth/login [post]
+// @Router /login [post]
 func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	var req domain.LoginRequest
 

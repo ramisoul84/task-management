@@ -319,8 +319,10 @@ func (r *teamRepo) GetTeamStats(ctx context.Context, teamID string) (*domain.Tea
 			SELECT 
 				COUNT(*) AS total_tasks,
 				COALESCE(SUM(CASE WHEN status = 'todo' THEN 1 ELSE 0 END), 0) AS todo_count,
-				COALESCE(SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END), 0) AS in_progress_count,
-				COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
+			COALESCE(SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END), 0) AS in_progress_count,
+			COALESCE(SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END), 0) AS review_count,
+			COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
+			COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count,
 				COALESCE(AVG(CASE 
 					WHEN status = 'done' AND closed_at IS NOT NULL 
 					THEN TIMESTAMPDIFF(HOUR, created_at, closed_at) 
@@ -353,7 +355,9 @@ func (r *teamRepo) GetTeamStats(ctx context.Context, teamID string) (*domain.Tea
 			ts.total_tasks,
 			ts.todo_count,
 			ts.in_progress_count,
+			ts.review_count,
 			ts.done_count,
+			ts.cancelled_count,
 			ts.avg_close_time,
 			cs.total_comments,
 			tp.user_id,
@@ -380,7 +384,9 @@ func (r *teamRepo) GetTeamStats(ctx context.Context, teamID string) (*domain.Tea
 			totalTasks    int
 			todoCount     int
 			inProgressCnt int
+			reviewCount   int
 			doneCount     int
+			cancelledCnt  int
 			avgCloseTime  sql.NullFloat64
 			totalComments int
 			userID        sql.NullString
@@ -392,7 +398,9 @@ func (r *teamRepo) GetTeamStats(ctx context.Context, teamID string) (*domain.Tea
 			&totalTasks,
 			&todoCount,
 			&inProgressCnt,
+			&reviewCount,
 			&doneCount,
+			&cancelledCnt,
 			&avgCloseTime,
 			&totalComments,
 			&userID,
@@ -406,7 +414,9 @@ func (r *teamRepo) GetTeamStats(ctx context.Context, teamID string) (*domain.Tea
 		stats.TotalTasks = totalTasks
 		stats.TasksByStatus[domain.TaskStatusTodo] = todoCount
 		stats.TasksByStatus[domain.TaskStatusInProgress] = inProgressCnt
+		stats.TasksByStatus[domain.TaskStatusReview] = reviewCount
 		stats.TasksByStatus[domain.TaskStatusDone] = doneCount
+		stats.TasksByStatus[domain.TaskStatusCancelled] = cancelledCnt
 		stats.TotalComments = totalComments
 
 		if avgCloseTime.Valid {

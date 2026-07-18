@@ -145,6 +145,12 @@ func (s *Server) setupRoutes(
 	auth.Post("/refresh", authHandler.Refresh)
 	auth.Post("/logout", authHandler.Logout)
 
+	// The assignment specifies these two endpoints directly under /api/v1.
+	// Keep the /auth variants for backwards compatibility with existing clients.
+	authCompat := api.Group("", s.rateLimiter.AuthLimit(s.cfg.Server.AuthRateMax, s.cfg.Server.AuthRateWindow))
+	authCompat.Post("/register", authHandler.Register)
+	authCompat.Post("/login", authHandler.Login)
+
 	// Protected routes
 	protected := api.Group("", middleware.Auth(s.tokenScv, s.tokenCache))
 

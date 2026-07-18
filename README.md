@@ -67,10 +67,12 @@ Auth: `Authorization: Bearer <token>` (except `/auth/*`)
 
 | Method | Endpoint | Description | Access |
 |--------|----------|-------------|--------|
-| POST | `/auth/register` | Register new user | Public |
-| POST | `/auth/login` | Login and get tokens | Public |
+| POST | `/register` | Register new user | Public |
+| POST | `/login` | Login and get tokens | Public |
 | POST | `/auth/refresh` | Refresh access token | Refresh cookie |
 | POST | `/auth/logout` | Logout and revoke tokens | Refresh cookie |
+
+`/auth/register` and `/auth/login` remain available as backwards-compatible aliases.
 
 ### Teams
 
@@ -94,3 +96,13 @@ Auth: `Authorization: Bearer <token>` (except `/auth/*`)
 | GET | `/tasks/:id/history` | Task change history | Team member |
 | GET | `/tasks/:id/comments` | List comments | Team member |
 | POST | `/tasks/:id/comments` | Add comment | Team member |
+
+## SQL report integration test
+
+The repository includes an opt-in MySQL integration test for the required team
+statistics query. Start the stack, then run:
+
+```bash
+INTEGRATION_MYSQL_DSN='task_management:change-me@tcp(localhost:3306)/task_management?parseTime=true' \
+  go test -tags=integration ./internal/repository
+```
