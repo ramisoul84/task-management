@@ -353,43 +353,13 @@ info:
   title: Task Management API
   version: "1.0"
 paths:
-  /auth/login:
+  /auth/logout:
     post:
       consumes:
       - application/json
-      description: Authenticate user with email and password
-      parameters:
-      - description: Login credentials
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.LoginRequest'
+      description: Revoke access token and refresh token
       produces:
       - application/json
-      responses:
-        "200":
-          description: Login successful
-          schema:
-            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.LoginResponse'
-        "400":
-          description: Validation error
-          schema:
-            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
-        "401":
-          description: Invalid credentials
-          schema:
-            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
-        "500":
-          description: Internal server error
-          schema:
-            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
-      summary: Login user
-      tags:
-      - Auth
-  /auth/logout:
-    post:
-      description: Revoke access token and refresh token
       responses:
         "204":
           description: Logged out successfully
@@ -401,8 +371,6 @@ paths:
           description: Internal server error
           schema:
             $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
-      security:
-      - BearerAuth: []
       summary: Logout user
       tags:
       - Auth
@@ -440,7 +408,41 @@ paths:
       summary: Refresh access token
       tags:
       - Auth
-  /auth/register:
+  /login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticate user with email and password
+      parameters:
+      - description: Login credentials
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Login successful
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.LoginResponse'
+        "400":
+          description: Validation error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "401":
+          description: Invalid credentials
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse'
+      summary: Login user
+      tags:
+      - Auth
+  /register:
     post:
       consumes:
       - application/json
