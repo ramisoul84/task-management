@@ -61,15 +61,23 @@ func (r *tokenCache) RotateRefreshToken(ctx context.Context, oldHash string, new
 	oldKey := refreshTokenKey(oldHash)
 	newKey := refreshTokenKey(newHash)
 
-	_, err := r.cache.Client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Del(ctx, oldKey)
-		pipe.Set(ctx, newKey, userID, r.refreshTTL)
-
-		return nil
-	})
-
+	// Atomically fetch-and-delete the old token. If it no longer exists (or
+	// belongs to a different user than expected), it was already consumed by
+	// a previous rotation — this is a replay/reuse attempt on a stale token.
+	oldVal, err := r.cache.Client.GetDel(ctx, oldKey).Result()
 	if err != nil {
-		return fmt.Errorf("rotate refresh token: %w", err)
+		if errors.Is(err, redis.Nil) {
+			return domain.ErrInvalidCredentials
+		}
+		return fmt.Errorf("rotate refresh token: get old token: %w", err)
+	}
+
+	if oldVal != userID {
+		return domain.ErrInvalidCredentials
+	}
+
+	if err := r.cache.Client.Set(ctx, newKey, userID, r.refreshTTL).Err(); err != nil {
+		return fmt.Errorf("rotate refresh token: set new token: %w", err)
 	}
 
 	return nil
