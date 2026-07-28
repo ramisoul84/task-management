@@ -16,7 +16,7 @@ const (
 	TaskStatusCancelled  TaskStatus = "cancelled"
 )
 
-// Task represents a task entity
+// Task represents a task entity	
 type Task struct {
 	ID          string     `json:"id" db:"id" example:"123e4567-e89b-12d3-a456-426614174000"`
 	TeamID      string     `json:"team_id" db:"team_id" example:"123e4567-e89b-12d3-a456-426614174001"`
@@ -80,11 +80,20 @@ type TaskComment struct {
 	CreatedAt time.Time `json:"created_at" db:"created_at" example:"2024-01-15T11:00:00Z"`
 }
 
+// FieldChange captures a single field's value before and after an update.
+// Storing both sides (rather than just the new value) is what makes
+// task_history a real audit trail instead of a "what changed" list with no
+// baseline to diff against.
+type FieldChange struct {
+	Old any `json:"old"`
+	New any `json:"new"`
+}
+
 // TaskHistory represents a change in task history
 type TaskHistory struct {
 	ID        int64           `json:"id" db:"id" example:"1"`
 	TaskID    string          `json:"task_id" db:"task_id" example:"123e4567-e89b-12d3-a456-426614174000"`
 	ChangedBy string          `json:"changed_by" db:"changed_by" example:"123e4567-e89b-12d3-a456-426614174002"`
-	Changes   json.RawMessage `json:"changes" db:"changes"`
+	Changes   json.RawMessage `json:"changes" db:"changes" swaggertype:"object"`
 	CreatedAt time.Time       `json:"created_at" db:"created_at" example:"2024-01-15T11:00:00Z"`
 }

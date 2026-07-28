@@ -247,6 +247,26 @@ func (r *taskRepo) UpdateWithHistory(
 			op, expectedVersion, currentTask.Version, domain.ErrConflict)
 	}
 
+	// Snapshot old values *before* mutating anything, so history records a
+	// real before/after diff rather than just the new value.
+	changes := make(map[string]domain.FieldChange, len(updates))
+
+	if v, ok := updates["title"]; ok {
+		changes["title"] = domain.FieldChange{Old: currentTask.Title, New: v}
+	}
+	if v, ok := updates["description"]; ok {
+		changes["description"] = domain.FieldChange{Old: currentTask.Description, New: v}
+	}
+	if v, ok := updates["status"]; ok {
+		changes["status"] = domain.FieldChange{Old: currentTask.Status, New: v}
+	}
+	if v, ok := updates["closed_at"]; ok {
+		changes["closed_at"] = domain.FieldChange{Old: currentTask.ClosedAt, New: v}
+	}
+	if v, ok := updates["assignee_id"]; ok {
+		changes["assignee_id"] = domain.FieldChange{Old: currentTask.AssigneeID, New: v}
+	}
+
 	// Build update query dynamically
 	updateQuery := "UPDATE tasks SET version = version + 1, updated_at = NOW()"
 	args := []interface{}{}
@@ -289,10 +309,8 @@ func (r *taskRepo) UpdateWithHistory(
 		return nil, fmt.Errorf("%s: no rows updated: %w", op, domain.ErrConflict)
 	}
 
-	// Record an auditable before/after snapshot. Storing only the submitted
-	// value makes it impossible to reconstruct what changed once the task has
-	// been updated.
-	changesJSON, err := json.Marshal(historyChanges(currentTask, updates))
+	// Record history with old+new values
+	changesJSON, err := json.Marshal(changes)
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal changes: %w", op, err)
 	}
