@@ -319,10 +319,10 @@ func (r *teamRepo) GetTeamStats(ctx context.Context, teamID string) (*domain.Tea
 			SELECT 
 				COUNT(*) AS total_tasks,
 				COALESCE(SUM(CASE WHEN status = 'todo' THEN 1 ELSE 0 END), 0) AS todo_count,
-			COALESCE(SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END), 0) AS in_progress_count,
-			COALESCE(SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END), 0) AS review_count,
-			COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
-			COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count,
+				COALESCE(SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END), 0) AS in_progress_count,
+				COALESCE(SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END), 0) AS review_count,
+				COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
+				COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count,
 				COALESCE(AVG(CASE 
 					WHEN status = 'done' AND closed_at IS NOT NULL 
 					THEN TIMESTAMPDIFF(HOUR, created_at, closed_at) 
