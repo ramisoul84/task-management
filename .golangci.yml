@@ -1,0 +1,61 @@
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - noctx
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+  settings:
+    gosec:
+      excludes:
+        - G104 # duplicated by errcheck
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    paths:
+      - docs
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ramisoul84/task-management
+  exclusions:
+    paths:
+      - docs
