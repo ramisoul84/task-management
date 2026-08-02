@@ -1,14 +1,18 @@
-# Binary
+# Binaries & build artifacts
 /bin/
 *.exe
+coverage.out
+coverage.html
 
-# Environment
+# Environment (secrets) — only .env.example is committed
 .env
 .env.dev
 .env.prod
+.env.*.local
 
 # Logs
 logs/
 *.log
 
+# Assignment spec
 *.pdf
