@@ -11,17 +11,22 @@ type User struct {
 	CreatedAt    time.Time `json:"created_at" db:"created_at" example:"2024-01-15T10:30:00Z"`
 }
 
+// Response converts the user to its public representation.
+func (u *User) Response() UserResponse {
+	return UserResponse{ID: u.ID, Email: u.Email, Name: u.Name}
+}
+
 // RegisterRequest represents user registration data
 type RegisterRequest struct {
-	Email    string `json:"email" validate:"required,email" example:"rami@mail.ru"`
-	Password string `json:"password" validate:"required,min=8" example:"StrongPass123!"`
-	Name     string `json:"name" validate:"required,min=2" example:"Rami Suliman"`
+	Email    string `json:"email" validate:"required,email,max=255" example:"rami@mail.ru"`
+	Password string `json:"password" validate:"required,min=8,max=72" example:"StrongPass123!"`
+	Name     string `json:"name" validate:"required,notblank,min=2,max=255" example:"Rami Suliman"`
 }
 
 // LoginRequest represents user login credentials
 type LoginRequest struct {
 	Email    string `json:"email" validate:"required,email,max=255" example:"rami@mail.ru"`
-	Password string `json:"password" validate:"required" example:"StrongPass123!"`
+	Password string `json:"password" validate:"required,max=72" example:"StrongPass123!"`
 }
 
 // UserResponse represents user data returned in API responses

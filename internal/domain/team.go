@@ -11,12 +11,19 @@ const (
 	RoleMember Role = "member"
 )
 
+// IsManager reports whether the role can manage the team (owner or admin).
+func (r Role) IsManager() bool {
+	return r == RoleOwner || r == RoleAdmin
+}
+
 // Team represents a team entity
 type Team struct {
 	ID        string    `json:"id" db:"id" example:"123e4567-e89b-12d3-a456-426614174000"`
 	Name      string    `json:"name" db:"name" example:"Development Team"`
 	CreatedBy string    `json:"created_by" db:"created_by" example:"123e4567-e89b-12d3-a456-426614174001"`
 	CreatedAt time.Time `json:"created_at" db:"created_at" example:"2024-01-15T10:30:00Z"`
+	// Role is the current user's role in the team (set on list endpoints).
+	Role Role `json:"role,omitempty" db:"role" example:"owner"`
 }
 
 // TeamMember represents a member in a team
@@ -28,7 +35,7 @@ type TeamMember struct {
 
 // CreateTeamRequest represents team creation data
 type CreateTeamRequest struct {
-	Name string `json:"name" validate:"required,min=2,max=255" example:"Development Team"`
+	Name string `json:"name" validate:"required,notblank,min=2,max=255" example:"Development Team"`
 }
 
 // InviteMemberRequest represents member invitation data

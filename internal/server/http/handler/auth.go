@@ -1,11 +1,11 @@
 package handler
 
 import (
-	"strings"
-
 	"github.com/gofiber/fiber/v2"
+
 	"github.com/ramisoul84/task-management/internal/config"
 	"github.com/ramisoul84/task-management/internal/domain"
+	"github.com/ramisoul84/task-management/internal/server/http/middleware"
 	"github.com/ramisoul84/task-management/internal/service"
 	"github.com/ramisoul84/task-management/pkg/validator"
 )
@@ -16,181 +16,136 @@ const (
 )
 
 type AuthHandler struct {
-	svc       service.AuthService
-	validator *validator.Validator
-	cfg       config.SecurityConfig
+	svc service.AuthService
+	v   *validator.Validator
+	cfg config.AuthConfig
 }
 
-func NewAuthHandler(svc service.AuthService, validator *validator.Validator, cfg config.SecurityConfig) *AuthHandler {
-	return &AuthHandler{
-		svc:       svc,
-		validator: validator,
-		cfg:       cfg,
-	}
+func NewAuthHandler(svc service.AuthService, v *validator.Validator, cfg config.AuthConfig) *AuthHandler {
+	return &AuthHandler{svc: svc, v: v, cfg: cfg}
 }
 
 // Register godoc
-// @Summary Register new user
-// @Description Create a new user account with email and password
-// @Tags Auth
-// @Accept json
-// @Produce json
-// @Param request body domain.RegisterRequest true "Registration details"
-// @Success 201 {object} domain.UserResponse "User registered successfully"
-// @Failure 400 {object} domain.ErrorResponse "Validation error"
-// @Failure 409 {object} domain.ErrorResponse "Email already exists"
-// @Failure 500 {object} domain.ErrorResponse "Internal server error"
-// @Router /register [post]
+//
+//	@Summary		Register a new user
+//	@Description	Creates an account. Email is case-insensitive and must be unique. Also served at /auth/register.
+//	@Tags			Auth
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		domain.RegisterRequest	true	"Registration details"
+//	@Success		201		{object}	domain.UserResponse
+//	@Failure		400		{object}	ErrorResponse	"Validation error"
+//	@Failure		409		{object}	ErrorResponse	"Email already registered"
+//	@Failure		429		{object}	ErrorResponse	"Rate limit exceeded"
+//	@Failure		500		{object}	ErrorResponse
+//	@Router			/register [post]
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	var req domain.RegisterRequest
-
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(
-			fiber.StatusBadRequest,
-			"invalid request body",
-		)
+	if err := bindJSON(c, h.v, &req); err != nil {
+		return err
 	}
 
-	if err := h.validator.Validate(req); err != nil {
-		return fiber.NewError(
-			fiber.StatusBadRequest,
-			err.Error(),
-		)
-	}
-
-	user, err := h.svc.Register(c.UserContext(), req.Email, req.Password, req.Name)
+	user, err := h.svc.Register(c.UserContext(), &req)
 	if err != nil {
-		return MapError(err)
+		return err
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(domain.UserResponse{
-		ID:    user.ID,
-		Email: user.Email,
-		Name:  user.Name,
-	})
+	return c.Status(fiber.StatusCreated).JSON(user.Response())
 }
 
 // Login godoc
-// @Summary Login user
-// @Description Authenticate user with email and password
-// @Tags Auth
-// @Accept json
-// @Produce json
-// @Param request body domain.LoginRequest true "Login credentials"
-// @Success 200 {object} domain.LoginResponse "Login successful"
-// @Failure 400 {object} domain.ErrorResponse "Validation error"
-// @Failure 401 {object} domain.ErrorResponse "Invalid credentials"
-// @Failure 500 {object} domain.ErrorResponse "Internal server error"
-// @Router /login [post]
+//
+//	@Summary		Log in
+//	@Description	Returns a short-lived JWT access token and sets an HttpOnly refresh-token cookie (path /api/v1/auth). Also served at /auth/login.
+//	@Tags			Auth
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		domain.LoginRequest	true	"Credentials"
+//	@Success		200		{object}	domain.LoginResponse
+//	@Header			200		{string}	Set-Cookie	"refresh_token=...; HttpOnly"
+//	@Failure		400		{object}	ErrorResponse	"Validation error"
+//	@Failure		401		{object}	ErrorResponse	"Invalid credentials"
+//	@Failure		429		{object}	ErrorResponse	"Rate limit exceeded"
+//	@Failure		500		{object}	ErrorResponse
+//	@Router			/login [post]
 func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	var req domain.LoginRequest
-
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(
-			fiber.StatusBadRequest,
-			"invalid request body",
-		)
+	if err := bindJSON(c, h.v, &req); err != nil {
+		return err
 	}
 
-	if err := h.validator.Validate(req); err != nil {
-		return fiber.NewError(
-			fiber.StatusBadRequest,
-			err.Error(),
-		)
-	}
-
-	result, err := h.svc.Login(c.UserContext(), req.Email, req.Password)
+	res, err := h.svc.Login(c.UserContext(), &req)
 	if err != nil {
-		return MapError(err)
+		return err
 	}
 
-	h.setRefreshCookie(c, result.Token.RefreshToken)
+	h.setRefreshCookie(c, res.Token.RefreshToken)
 
 	return c.JSON(domain.LoginResponse{
-		User: domain.UserResponse{
-			ID:    result.User.ID,
-			Email: result.User.Email,
-			Name:  result.User.Name,
-		},
-		AccessToken: result.Token.AccessToken,
+		User:        res.User.Response(),
+		AccessToken: res.Token.AccessToken,
 		TokenType:   "Bearer",
-		ExpiresIn:   result.Token.ExpiresIn,
+		ExpiresIn:   res.Token.ExpiresIn,
 	})
 }
 
 // Refresh godoc
-// @Summary Refresh access token
-// @Description Get new access token using refresh token
-// @Tags Auth
-// @Accept json
-// @Produce json
-// @Param refresh_token body string true "Refresh token"
-// @Success 200 {object} domain.RefreshResponse "Token refreshed"
-// @Failure 400 {object} domain.ErrorResponse "Validation error"
-// @Failure 401 {object} domain.ErrorResponse "Invalid refresh token"
-// @Failure 500 {object} domain.ErrorResponse "Internal server error"
-// @Router /auth/refresh [post]
+//
+//	@Summary		Refresh the access token
+//	@Description	Exchanges the refresh-token cookie for a new access token and rotates the cookie. Each refresh token works once; replaying an old one fails.
+//	@Tags			Auth
+//	@Produce		json
+//	@Param			Cookie	header		string	true	"refresh_token=<token>"
+//	@Success		200		{object}	domain.RefreshResponse
+//	@Failure		401		{object}	ErrorResponse	"Missing, expired or reused refresh token"
+//	@Failure		500		{object}	ErrorResponse
+//	@Router			/auth/refresh [post]
 func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
-	refreshToken := c.Cookies(refreshCookieName)
-
-	if refreshToken == "" {
-		return fiber.NewError(
-			fiber.StatusUnauthorized,
-			"refresh token required",
-		)
-	}
-
-	result, err := h.svc.Refresh(c.UserContext(), refreshToken)
+	pair, err := h.svc.Refresh(c.UserContext(), c.Cookies(refreshCookieName))
 	if err != nil {
-		return MapError(err)
+		h.clearRefreshCookie(c)
+		return err
 	}
 
-	h.setRefreshCookie(c, result.RefreshToken)
+	h.setRefreshCookie(c, pair.RefreshToken)
+
 	return c.JSON(domain.RefreshResponse{
-		AccessToken: result.AccessToken,
+		AccessToken: pair.AccessToken,
 		TokenType:   "Bearer",
-		ExpiresIn:   result.ExpiresIn,
+		ExpiresIn:   pair.ExpiresIn,
 	})
 }
 
 // Logout godoc
-// @Summary Logout user
-// @Description Revoke access token and refresh token
-// @Tags Auth
-// @Accept json
-// @Produce json
-// @Success 204 "Logged out successfully"
-// @Failure 401 {object} domain.ErrorResponse "Unauthorized"
-// @Failure 500 {object} domain.ErrorResponse "Internal server error"
-// @Router /auth/logout [post]
+//
+//	@Summary		Log out
+//	@Description	Revokes the bearer access token (if sent) and the refresh-token cookie. Idempotent.
+//	@Tags			Auth
+//	@Security		BearerAuth
+//	@Success		204
+//	@Failure		500	{object}	ErrorResponse
+//	@Router			/auth/logout [post]
 func (h *AuthHandler) Logout(c *fiber.Ctx) error {
-	refreshToken := c.Cookies(refreshCookieName)
+	access, _ := middleware.BearerToken(c)
 
-	accessToken := ""
-	if header := c.Get(fiber.HeaderAuthorization); strings.HasPrefix(header, "Bearer ") {
-		accessToken = strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-	}
-
-	if err := h.svc.Logout(c.UserContext(), accessToken, refreshToken); err != nil {
-		return MapError(err)
+	if err := h.svc.Logout(c.UserContext(), access, c.Cookies(refreshCookieName)); err != nil {
+		return err
 	}
 
 	h.clearRefreshCookie(c)
-
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// setRefreshCookie sets the refresh cookie
 func (h *AuthHandler) setRefreshCookie(c *fiber.Ctx, token string) {
 	c.Cookie(&fiber.Cookie{
 		Name:     refreshCookieName,
 		Value:    token,
 		Path:     refreshCookiePath,
 		Domain:   h.cfg.CookieDomain,
+		MaxAge:   int(h.cfg.RefreshTokenTTL.Seconds()),
 		HTTPOnly: true,
 		Secure:   h.cfg.CookieSecure,
 		SameSite: h.cfg.CookieSameSite,
-		MaxAge:   int(h.cfg.RefreshTokenTTL.Seconds()),
 	})
 }
 
@@ -199,9 +154,10 @@ func (h *AuthHandler) clearRefreshCookie(c *fiber.Ctx) {
 		Name:     refreshCookieName,
 		Value:    "",
 		Path:     refreshCookiePath,
+		Domain:   h.cfg.CookieDomain,
+		MaxAge:   -1,
 		HTTPOnly: true,
 		Secure:   h.cfg.CookieSecure,
 		SameSite: h.cfg.CookieSameSite,
-		MaxAge:   -1,
 	})
 }

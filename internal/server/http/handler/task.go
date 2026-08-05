@@ -2,253 +2,218 @@ package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
+
 	"github.com/ramisoul84/task-management/internal/domain"
-	"github.com/ramisoul84/task-management/internal/server/http/middleware"
 	"github.com/ramisoul84/task-management/internal/service"
 	"github.com/ramisoul84/task-management/pkg/validator"
 )
 
 type TaskHandler struct {
-	svc       service.TaskService
-	validator *validator.Validator
+	svc service.TaskService
+	v   *validator.Validator
 }
 
-func NewTaskHandler(svc service.TaskService, validator *validator.Validator) *TaskHandler {
-	return &TaskHandler{
-		svc:       svc,
-		validator: validator,
-	}
+func NewTaskHandler(svc service.TaskService, v *validator.Validator) *TaskHandler {
+	return &TaskHandler{svc: svc, v: v}
 }
 
 // Create godoc
-// @Summary Create task
-// @Description Create a new task in a team
-// @Tags Tasks
-// @Security BearerAuth
-// @Accept json
-// @Produce json
-// @Param request body domain.CreateTaskRequest true "Task details"
-// @Success 201 {object} domain.Task "Task created"
-// @Failure 400 {object} domain.ErrorResponse "Validation error"
-// @Failure 401 {object} domain.ErrorResponse "Unauthorized"
-// @Failure 403 {object} domain.ErrorResponse "Not team member"
-// @Failure 500 {object} domain.ErrorResponse "Internal server error"
-// @Router /tasks [post]
+//
+//	@Summary		Create a task
+//	@Description	Any team member can create a task. The caller is the creator; the assignee defaults to the caller and must belong to the team.
+//	@Tags			Tasks
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		domain.CreateTaskRequest	true	"Task"
+//	@Success		201		{object}	domain.Task
+//	@Failure		400		{object}	ErrorResponse	"Validation error / assignee not in team"
+//	@Failure		401		{object}	ErrorResponse
+//	@Failure		403		{object}	ErrorResponse	"Not a team member"
+//	@Failure		500		{object}	ErrorResponse
+//	@Router			/tasks [post]
 func (h *TaskHandler) Create(c *fiber.Ctx) error {
-	userID, ok := middleware.UserID(c)
-	if !ok {
-		return fiber.ErrUnauthorized
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
 	}
 
 	var req domain.CreateTaskRequest
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-	}
-
-	if err := h.validator.Validate(req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	if err := bindJSON(c, h.v, &req); err != nil {
+		return err
 	}
 
 	task, err := h.svc.CreateTask(c.UserContext(), userID, &req)
 	if err != nil {
-		return MapError(err)
+		return err
 	}
-
 	return c.Status(fiber.StatusCreated).JSON(task)
 }
 
 // ListByTeam godoc
-// @Summary List tasks
-// @Description Get tasks with filters and pagination
-// @Tags Tasks
-// @Security BearerAuth
-// @Produce json
-// @Param team_id query string true "Team ID"
-// @Param status query string false "Task status" Enums(todo, in_progress, review, done, cancelled)
-// @Param assignee_id query string false "Assignee ID"
-// @Param limit query int false "Items per page" default(20)
-// @Param offset query int false "Offset" default(0)
-// @Success 200 {object} domain.TaskListResponse "Tasks retrieved"
-// @Failure 400 {object} domain.ErrorResponse "Validation error"
-// @Failure 401 {object} domain.ErrorResponse "Unauthorized"
-// @Failure 403 {object} domain.ErrorResponse "Not team member"
-// @Router /tasks [get]
+//
+//	@Summary		List a team's tasks
+//	@Description	Filtered, paginated list (newest first). Results are cached in Redis for 5 minutes per team+filter combination and invalidated on any task change.
+//	@Tags			Tasks
+//	@Security		BearerAuth
+//	@Produce		json
+//	@Param			team_id		query		string	true	"Team ID"	format(uuid)
+//	@Param			status		query		string	false	"Status"	Enums(todo, in_progress, review, done, cancelled)
+//	@Param			assignee_id	query		string	false	"Assignee"	format(uuid)
+//	@Param			limit		query		int		false	"Page size (1-100)"	default(20)
+//	@Param			offset		query		int		false	"Offset"			default(0)
+//	@Success		200			{object}	domain.TaskListResponse
+//	@Failure		400			{object}	ErrorResponse
+//	@Failure		401			{object}	ErrorResponse
+//	@Failure		403			{object}	ErrorResponse	"Not a team member"
+//	@Router			/tasks [get]
 func (h *TaskHandler) ListByTeam(c *fiber.Ctx) error {
-	userID, ok := middleware.UserID(c)
-	if !ok {
-		return fiber.ErrUnauthorized
-	}
-
-	var query domain.TaskListQuery
-	if err := c.QueryParser(&query); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid query parameters")
-	}
-
-	// Set default values
-	if query.Limit == 0 {
-		query.Limit = 20
-	}
-	if query.Limit > 100 {
-		query.Limit = 100
-	}
-
-	if err := h.validator.Validate(query); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
-	}
-
-	result, err := h.svc.ListTasksByTeam(c.UserContext(), userID, &query)
+	userID, err := currentUser(c)
 	if err != nil {
-		return MapError(err)
+		return err
 	}
 
-	return c.JSON(result)
+	var q domain.TaskListQuery
+	if err := bindQuery(c, h.v, &q); err != nil {
+		return err
+	}
+
+	res, err := h.svc.ListTasks(c.UserContext(), userID, &q)
+	if err != nil {
+		return err
+	}
+	return c.JSON(res)
 }
 
 // Update godoc
-// @Summary Update task
-// @Description Update task with permission checks
-// @Tags Tasks
-// @Security BearerAuth
-// @Accept json
-// @Produce json
-// @Param id path string true "Task ID"
-// @Param request body domain.UpdateTaskRequest true "Task updates"
-// @Success 200 {object} domain.Task "Task updated"
-// @Failure 400 {object} domain.ErrorResponse "Validation error"
-// @Failure 401 {object} domain.ErrorResponse "Unauthorized"
-// @Failure 403 {object} domain.ErrorResponse "Forbidden"
-// @Failure 404 {object} domain.ErrorResponse "Task not found"
-// @Failure 409 {object} domain.ErrorResponse "Version conflict"
-// @Router /tasks/{id} [put]
+//
+//	@Summary		Update a task
+//	@Description	Partial update guarded by optimistic locking: send the version you read; a stale version returns 409. Owner/admin/creator may change any field; the assignee may change only the status. Every change is recorded in history with old and new values.
+//	@Tags			Tasks
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Produce		json
+//	@Param			id		path		string						true	"Task ID"	format(uuid)
+//	@Param			request	body		domain.UpdateTaskRequest	true	"Fields to change"
+//	@Success		200		{object}	domain.Task
+//	@Failure		400		{object}	ErrorResponse	"Validation error / assignee not in team"
+//	@Failure		401		{object}	ErrorResponse
+//	@Failure		403		{object}	ErrorResponse	"Not allowed to change this field"
+//	@Failure		404		{object}	ErrorResponse	"Task not found"
+//	@Failure		409		{object}	ErrorResponse	"Version conflict"
+//	@Router			/tasks/{id} [put]
 func (h *TaskHandler) Update(c *fiber.Ctx) error {
-	userID, ok := middleware.UserID(c)
-	if !ok {
-		return fiber.ErrUnauthorized
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
 	}
-
-	taskID := c.Params("id")
-	if taskID == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "task ID is required")
+	taskID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
 	}
 
 	var req domain.UpdateTaskRequest
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-	}
-
-	if err := h.validator.Validate(req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	if err := bindJSON(c, h.v, &req); err != nil {
+		return err
 	}
 
 	task, err := h.svc.UpdateTask(c.UserContext(), userID, taskID, &req)
 	if err != nil {
-		return MapError(err)
+		return err
 	}
-
 	return c.JSON(task)
 }
 
 // GetHistory godoc
-// @Summary Get task history
-// @Description Get change history for a task
-// @Tags Tasks
-// @Security BearerAuth
-// @Produce json
-// @Param id path string true "Task ID"
-// @Success 200 {array} domain.TaskHistory "Task history"
-// @Failure 401 {object} domain.ErrorResponse "Unauthorized"
-// @Failure 403 {object} domain.ErrorResponse "Forbidden"
-// @Failure 404 {object} domain.ErrorResponse "Task not found"
-// @Router /tasks/{id}/history [get]
+//
+//	@Summary	Task change history
+//	@Tags		Tasks
+//	@Security	BearerAuth
+//	@Produce	json
+//	@Param		id	path		string	true	"Task ID"	format(uuid)
+//	@Success	200	{array}		domain.TaskHistory
+//	@Failure	400	{object}	ErrorResponse
+//	@Failure	401	{object}	ErrorResponse
+//	@Failure	404	{object}	ErrorResponse	"Task not found"
+//	@Router		/tasks/{id}/history [get]
 func (h *TaskHandler) GetHistory(c *fiber.Ctx) error {
-	userID, ok := middleware.UserID(c)
-	if !ok {
-		return fiber.ErrUnauthorized
-	}
-
-	taskID := c.Params("id")
-	if taskID == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "task ID is required")
-	}
-
-	history, err := h.svc.GetTaskHistory(c.UserContext(), userID, taskID)
+	userID, err := currentUser(c)
 	if err != nil {
-		return MapError(err)
+		return err
+	}
+	taskID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
 	}
 
+	history, err := h.svc.GetHistory(c.UserContext(), userID, taskID)
+	if err != nil {
+		return err
+	}
 	return c.JSON(history)
 }
 
 // AddComment godoc
-// @Summary Add comment
-// @Description Add comment to a task
-// @Tags Tasks
-// @Security BearerAuth
-// @Accept json
-// @Produce json
-// @Param id path string true "Task ID"
-// @Param request body domain.CreateCommentRequest true "Comment content"
-// @Success 201 {object} domain.TaskComment "Comment added"
-// @Failure 400 {object} domain.ErrorResponse "Validation error"
-// @Failure 401 {object} domain.ErrorResponse "Unauthorized"
-// @Failure 403 {object} domain.ErrorResponse "Forbidden"
-// @Failure 404 {object} domain.ErrorResponse "Task not found"
-// @Router /tasks/{id}/comments [post]
+//
+//	@Summary	Comment on a task
+//	@Tags		Tasks
+//	@Security	BearerAuth
+//	@Accept		json
+//	@Produce	json
+//	@Param		id		path		string						true	"Task ID"	format(uuid)
+//	@Param		request	body		domain.CreateCommentRequest	true	"Comment"
+//	@Success	201		{object}	domain.TaskComment
+//	@Failure	400		{object}	ErrorResponse
+//	@Failure	401		{object}	ErrorResponse
+//	@Failure	404		{object}	ErrorResponse	"Task not found"
+//	@Router		/tasks/{id}/comments [post]
 func (h *TaskHandler) AddComment(c *fiber.Ctx) error {
-	userID, ok := middleware.UserID(c)
-	if !ok {
-		return fiber.ErrUnauthorized
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
 	}
-
-	taskID := c.Params("id")
-	if taskID == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "task ID is required")
+	taskID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
 	}
 
 	var req domain.CreateCommentRequest
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-	}
-
-	if err := h.validator.Validate(req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	if err := bindJSON(c, h.v, &req); err != nil {
+		return err
 	}
 
 	comment, err := h.svc.AddComment(c.UserContext(), userID, taskID, &req)
 	if err != nil {
-		return MapError(err)
+		return err
 	}
-
 	return c.Status(fiber.StatusCreated).JSON(comment)
 }
 
 // ListComments godoc
-// @Summary List comments
-// @Description Get all comments for a task
-// @Tags Tasks
-// @Security BearerAuth
-// @Produce json
-// @Param id path string true "Task ID"
-// @Success 200 {array} domain.TaskComment "Comments retrieved"
-// @Failure 401 {object} domain.ErrorResponse "Unauthorized"
-// @Failure 403 {object} domain.ErrorResponse "Forbidden"
-// @Failure 404 {object} domain.ErrorResponse "Task not found"
-// @Router /tasks/{id}/comments [get]
+//
+//	@Summary	List task comments
+//	@Tags		Tasks
+//	@Security	BearerAuth
+//	@Produce	json
+//	@Param		id	path		string	true	"Task ID"	format(uuid)
+//	@Success	200	{array}		domain.TaskComment
+//	@Failure	400	{object}	ErrorResponse
+//	@Failure	401	{object}	ErrorResponse
+//	@Failure	404	{object}	ErrorResponse	"Task not found"
+//	@Router		/tasks/{id}/comments [get]
 func (h *TaskHandler) ListComments(c *fiber.Ctx) error {
-	userID, ok := middleware.UserID(c)
-	if !ok {
-		return fiber.ErrUnauthorized
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
 	}
-
-	taskID := c.Params("id")
-	if taskID == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "task ID is required")
+	taskID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
 	}
 
 	comments, err := h.svc.ListComments(c.UserContext(), userID, taskID)
 	if err != nil {
-		return MapError(err)
+		return err
 	}
-
 	return c.JSON(comments)
 }

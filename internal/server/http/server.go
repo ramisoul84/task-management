@@ -1,3 +1,5 @@
+// Package http assembles the Fiber application: middleware, routes and
+// health endpoints.
 package http
 
 import (
@@ -6,170 +8,184 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	_ "github.com/ramisoul84/task-management/docs"
-	"github.com/ramisoul84/task-management/internal/cache"
+	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
+	swagger "github.com/swaggo/fiber-swagger"
+
+	_ "github.com/ramisoul84/task-management/docs" // swagger spec
 	"github.com/ramisoul84/task-management/internal/config"
-	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/internal/server/http/handler"
 	"github.com/ramisoul84/task-management/internal/server/http/middleware"
 	"github.com/ramisoul84/task-management/pkg/auth"
-	"github.com/ramisoul84/task-management/pkg/logger"
-	"github.com/redis/go-redis/v9"
-	swagger "github.com/swaggo/fiber-swagger"
 )
 
-type Server struct {
-	app         *fiber.App
-	tokenScv    auth.TokenService
-	tokenCache  cache.TokenCache
-	log         *logger.Logger
-	cfg         *config.Config
-	rateLimiter *middleware.RateLimiter
+// HealthCheck reports whether a dependency is usable.
+type HealthCheck func(ctx context.Context) error
+
+// Handlers groups the resource handlers.
+type Handlers struct {
+	Auth *handler.AuthHandler
+	Team *handler.TeamHandler
+	Task *handler.TaskHandler
 }
 
-func NewServer(
-	cfg *config.Config,
-	tokenScv auth.TokenService,
-	tokenCache cache.TokenCache,
-	redisClient *redis.Client,
-	log *logger.Logger,
-	authHandler *handler.AuthHandler,
-	teamHandler *handler.TeamHandler,
-	taskHandler *handler.TaskHandler,
-) *Server {
-	app := fiber.New(fiber.Config{
-		AppName:               cfg.App.Name,
+// Deps are the server's collaborators.
+type Deps struct {
+	Config     *config.Config
+	Log        zerolog.Logger
+	Tokens     auth.TokenService
+	TokenCache middleware.TokenBlacklist
+	Redis      *redis.Client
+	Handlers   Handlers
+	Checks     map[string]HealthCheck
+}
+
+type Server struct {
+	app  *fiber.App
+	deps Deps
+}
+
+func New(deps Deps) *Server {
+	cfg := deps.Config.HTTP
+
+	fcfg := fiber.Config{
+		AppName:               deps.Config.App.Name,
 		DisableStartupMessage: true,
-		ReadTimeout:           cfg.Server.ReadTimeout,
-		WriteTimeout:          cfg.Server.WriteTimeout,
-		IdleTimeout:           cfg.Server.IdleTimeout,
-		BodyLimit:             cfg.Server.BodyLimitMB * 1024 * 1024,
-		ErrorHandler:          errorHandler(log),
-	})
-
-	// Create rate limiter once
-	rateLimiter := middleware.NewRateLimiter(redisClient)
-
-	server := &Server{
-		app:         app,
-		tokenScv:    tokenScv,
-		tokenCache:  tokenCache,
-		log:         log,
-		cfg:         cfg,
-		rateLimiter: rateLimiter,
+		CaseSensitive:         true,
+		ReadTimeout:           cfg.ReadTimeout,
+		WriteTimeout:          cfg.WriteTimeout,
+		IdleTimeout:           cfg.IdleTimeout,
+		BodyLimit:             cfg.BodyLimitBytes,
+		ErrorHandler:          handler.ErrorHandler,
 	}
 
-	server.setupMiddleware()
-	server.setupRoutes(authHandler, teamHandler, taskHandler)
+	// Only honour X-Forwarded-For from known proxies; otherwise any client
+	// could spoof its IP and dodge rate limiting.
+	if len(cfg.TrustedProxies) > 0 {
+		fcfg.EnableTrustedProxyCheck = true
+		fcfg.TrustedProxies = cfg.TrustedProxies
+		fcfg.ProxyHeader = fiber.HeaderXForwardedFor
+	}
 
-	return server
+	s := &Server{app: fiber.New(fcfg), deps: deps}
+	s.middleware()
+	s.routes()
+
+	return s
 }
 
-func (s *Server) Run() error {
-	addr := fmt.Sprintf(":%d", s.cfg.Server.Port)
-	return s.app.Listen(addr)
+func (s *Server) Listen() error {
+	return s.app.Listen(fmt.Sprintf(":%d", s.deps.Config.HTTP.Port))
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
-	s.log.Info().Msg("shutting down HTTP server")
 	return s.app.ShutdownWithContext(ctx)
 }
 
-func errorHandler(log *logger.Logger) fiber.ErrorHandler {
-	return func(c *fiber.Ctx, err error) error {
-		code := fiber.StatusInternalServerError
-		message := "internal server error"
+// App exposes the Fiber app (used by HTTP tests via app.Test).
+func (s *Server) App() *fiber.App { return s.app }
 
-		if e, ok := err.(*fiber.Error); ok {
-			code = e.Code
-			message = e.Message
-		}
+// middleware installs the global chain. Order matters:
+// request ID first (so everything is correlated), access log next (so it
+// sees the final status), then recover (so panics become logged 500s).
+func (s *Server) middleware() {
+	cfg := s.deps.Config
 
-		requestID, _ := c.Locals(domain.RequestIDKey).(string)
-		startTime, _ := c.Locals("start_time").(time.Time)
-		duration := time.Since(startTime)
+	s.app.Use(middleware.RequestID(s.deps.Log))
+	s.app.Use(middleware.AccessLog())
+	s.app.Use(middleware.Recover())
+	s.app.Use(middleware.SecureHeaders(cfg.IsProduction()))
+	s.app.Use(middleware.CORS(cfg.HTTP.AllowedOrigins, cfg.HTTP.AllowCredentials))
+	s.app.Use(middleware.Timeout(cfg.HTTP.RequestTimeout))
+}
 
-		log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("method", c.Method()).
-			Str("path", c.Path()).
-			Int("status", code).
-			Dur("duration_ms", duration).
-			Msg("request failed")
+func (s *Server) routes() {
+	cfg := s.deps.Config
+	h := s.deps.Handlers
 
-		return c.Status(code).JSON(domain.ErrorResponse{
-			Error: message,
-		})
+	// Probes: liveness never touches dependencies (a DB outage must not get
+	// the pod restarted); readiness does.
+	s.app.Get("/livez", s.livez)
+	s.app.Get("/readyz", s.readyz)
+	s.app.Get("/health", s.readyz)
+
+	if cfg.HTTP.EnableDocs {
+		s.app.Get("/docs", func(c *fiber.Ctx) error { return c.Redirect("/docs/index.html") })
+		s.app.Get("/docs/*", swagger.WrapHandler)
 	}
-}
 
-// setupMiddleware configures global middleware
-func (s *Server) setupMiddleware() {
-	// CORS
-	s.app.Use(middleware.CORS(s.cfg.Server.AllowedOrigins, s.cfg.Server.AllowCredentials))
-
-	s.app.Use(middleware.RequestID())
-
-	s.app.Use(middleware.Logger(s.log))
-
-	// Global rate limit
-	s.app.Use(s.rateLimiter.GlobalLimit(s.cfg.Server.GlobalRateMax, s.cfg.Server.GlobalRateWindow))
-}
-
-func (s *Server) setupRoutes(
-	authHandler *handler.AuthHandler,
-	teamHandler *handler.TeamHandler,
-	taskHandler *handler.TaskHandler,
-) {
-	// Health check
-	s.app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status": "ok",
-			"time":   time.Now(),
-		})
-	})
-
-	// Docs
-	s.app.Get("/docs", func(c *fiber.Ctx) error {
-		return c.Redirect("/docs/index.html")
-	})
-	s.app.Get("/docs/*", swagger.WrapHandler)
+	limiter := middleware.NewRateLimiter(s.deps.Redis)
 
 	api := s.app.Group("/api/v1")
+	if cfg.RateLimit.Enabled {
+		api.Use(limiter.GlobalLimit(cfg.RateLimit.GlobalMax, cfg.RateLimit.GlobalWindow))
+	}
 
-	// Auth routes with stricter rate limit (use s.rateLimiter)
-	auth := api.Group("/auth", s.rateLimiter.AuthLimit(s.cfg.Server.AuthRateMax, s.cfg.Server.AuthRateWindow))
-	auth.Post("/register", authHandler.Register)
-	auth.Post("/login", authHandler.Login)
-	auth.Post("/refresh", authHandler.Refresh)
-	auth.Post("/logout", authHandler.Logout)
+	authLimit := func(c *fiber.Ctx) error { return c.Next() }
+	if cfg.RateLimit.Enabled {
+		authLimit = limiter.AuthLimit(cfg.RateLimit.AuthMax, cfg.RateLimit.AuthWindow)
+	}
 
-	// The assignment specifies these two endpoints directly under /api/v1.
-	// Keep the /auth variants for backwards compatibility with existing clients.
-	authCompat := api.Group("", s.rateLimiter.AuthLimit(s.cfg.Server.AuthRateMax, s.cfg.Server.AuthRateWindow))
-	authCompat.Post("/register", authHandler.Register)
-	authCompat.Post("/login", authHandler.Login)
+	// Public auth endpoints. The spec puts register/login directly under
+	// /api/v1; the /auth/* aliases are what the web client uses.
+	api.Post("/register", authLimit, h.Auth.Register)
+	api.Post("/login", authLimit, h.Auth.Login)
 
-	// Protected routes
-	protected := api.Group("", middleware.Auth(s.tokenScv, s.tokenCache))
+	authGroup := api.Group("/auth", authLimit)
+	authGroup.Post("/register", h.Auth.Register)
+	authGroup.Post("/login", h.Auth.Login)
+	authGroup.Post("/refresh", h.Auth.Refresh)
+	authGroup.Post("/logout", h.Auth.Logout)
 
-	// Team routes
+	// Everything below requires a valid access token.
+	protected := api.Group("", middleware.Auth(s.deps.Tokens, s.deps.TokenCache))
+
 	teams := protected.Group("/teams")
-	teams.Post("/", teamHandler.Create)
-	teams.Get("/", teamHandler.List)
-	teams.Post("/:id/invite", teamHandler.Invite)
-	teams.Get("/:id/members", teamHandler.ListMembers)
-	teams.Patch("/:id/members/:userID/role", teamHandler.ChangeMemberRole)
-	teams.Delete("/:id/members/:userID", teamHandler.RemoveMember)
-	teams.Get("/:id/stats", teamHandler.GetStats)
+	teams.Post("/", h.Team.Create)
+	teams.Get("/", h.Team.List)
+	teams.Post("/:id/invite", h.Team.Invite)
+	teams.Get("/:id/members", h.Team.ListMembers)
+	teams.Patch("/:id/members/:userID/role", h.Team.ChangeMemberRole)
+	teams.Delete("/:id/members/:userID", h.Team.RemoveMember)
+	teams.Get("/:id/stats", h.Team.GetStats)
 
-	// Task routes
 	tasks := protected.Group("/tasks")
-	tasks.Post("/", taskHandler.Create)
-	tasks.Get("/", taskHandler.ListByTeam)
-	tasks.Put("/:id", taskHandler.Update)
-	tasks.Get("/:id/history", taskHandler.GetHistory)
-	tasks.Post("/:id/comments", taskHandler.AddComment)
-	tasks.Get("/:id/comments", taskHandler.ListComments)
+	tasks.Post("/", h.Task.Create)
+	tasks.Get("/", h.Task.ListByTeam)
+	tasks.Put("/:id", h.Task.Update)
+	tasks.Get("/:id/history", h.Task.GetHistory)
+	tasks.Post("/:id/comments", h.Task.AddComment)
+	tasks.Get("/:id/comments", h.Task.ListComments)
+}
+
+func (s *Server) livez(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{"status": "ok"})
+}
+
+func (s *Server) readyz(c *fiber.Ctx) error {
+	ctx, cancel := context.WithTimeout(c.UserContext(), 2*time.Second)
+	defer cancel()
+
+	status := fiber.StatusOK
+	checks := make(map[string]string, len(s.deps.Checks))
+	for name, check := range s.deps.Checks {
+		if err := check(ctx); err != nil {
+			status = fiber.StatusServiceUnavailable
+			checks[name] = "down"
+			continue
+		}
+		checks[name] = "up"
+	}
+
+	state := "ok"
+	if status != fiber.StatusOK {
+		state = "degraded"
+	}
+
+	return c.Status(status).JSON(fiber.Map{
+		"status":  state,
+		"checks":  checks,
+		"version": s.deps.Config.App.Version,
+		"time":    time.Now().UTC(),
+	})
 }

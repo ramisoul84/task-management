@@ -11,6 +11,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/pkg/database"
 )
@@ -29,7 +30,7 @@ func TestTeamRepositoryGetTeamStats(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sqlDB.Close()
-	repo := NewTeamRepository(&database.DB{DB: sqlDB})
+	repo := NewTeamRepository(database.Wrap(sqlDB))
 	ctx := context.Background()
 
 	ownerID, assigneeID, teamID := uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -70,7 +71,7 @@ func TestTeamRepositoryGetTeamStats(t *testing.T) {
 		}
 	}
 
-	stats, err := repo.GetTeamStats(ctx, teamID)
+	stats, err := repo.GetStats(ctx, teamID)
 	if err != nil {
 		t.Fatal(err)
 	}

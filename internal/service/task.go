@@ -2,768 +2,355 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/ramisoul84/task-management/internal/cache"
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/internal/repository"
 	"github.com/ramisoul84/task-management/pkg/logger"
 )
 
+const (
+	DefaultPageSize = 20
+	MaxPageSize     = 100
+)
+
 type TaskService interface {
-	CreateTask(ctx context.Context, creatorID string, input *domain.CreateTaskRequest) (*domain.Task, error)
-	ListTasksByTeam(ctx context.Context, userID string, query *domain.TaskListQuery) (*domain.TaskListResponse, error)
-	UpdateTask(ctx context.Context, userID string, taskID string, input *domain.UpdateTaskRequest) (*domain.Task, error)
-	GetTaskHistory(ctx context.Context, userID string, taskID string) ([]*domain.TaskHistory, error)
-	AddComment(ctx context.Context, userID string, taskID string, input *domain.CreateCommentRequest) (*domain.TaskComment, error)
-	ListComments(ctx context.Context, userID string, taskID string) ([]*domain.TaskComment, error)
+	CreateTask(ctx context.Context, userID string, req *domain.CreateTaskRequest) (*domain.Task, error)
+	ListTasks(ctx context.Context, userID string, q *domain.TaskListQuery) (*domain.TaskListResponse, error)
+	UpdateTask(ctx context.Context, userID, taskID string, req *domain.UpdateTaskRequest) (*domain.Task, error)
+	GetHistory(ctx context.Context, userID, taskID string) ([]*domain.TaskHistory, error)
+	AddComment(ctx context.Context, userID, taskID string, req *domain.CreateCommentRequest) (*domain.TaskComment, error)
+	ListComments(ctx context.Context, userID, taskID string) ([]*domain.TaskComment, error)
 }
 
 type taskService struct {
-	taskRepo  repository.TaskRepository
-	taskCache cache.TaskCache
-	teamRepo  repository.TeamRepository
-	rbacSvc   RBACService
-	log       *logger.Logger
+	tx    Transactor
+	tasks repository.TaskRepository
+	teams repository.TeamRepository
+	cache cache.TaskCache
+	now   func() time.Time
 }
 
 func NewTaskService(
-	taskRepo repository.TaskRepository,
+	tx Transactor,
+	tasks repository.TaskRepository,
+	teams repository.TeamRepository,
 	taskCache cache.TaskCache,
-	teamRepo repository.TeamRepository,
-	rbacSvc RBACService,
-	log *logger.Logger,
 ) TaskService {
 	return &taskService{
-		taskRepo:  taskRepo,
-		taskCache: taskCache,
-		teamRepo:  teamRepo,
-		rbacSvc:   rbacSvc,
-		log:       log,
+		tx:    tx,
+		tasks: tasks,
+		teams: teams,
+		cache: taskCache,
+		now:   func() time.Time { return time.Now().UTC().Truncate(time.Second) },
 	}
 }
 
-// CreateTask creates a new task in a team
-func (s *taskService) CreateTask(ctx context.Context, creatorID string, input *domain.CreateTaskRequest) (*domain.Task, error) {
-	const op = "taskService.CreateTask"
-	requestID := logger.RequestIDFromContext(ctx)
-
-	// Input validation
-	if creatorID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("create task failed: creator ID is required")
-		return nil, fmt.Errorf("%s: creator ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if input == nil {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("create task failed: input is required")
-		return nil, fmt.Errorf("%s: input is required: %w", op, domain.ErrInvalidInput)
-	}
-	if input.TeamID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("create task failed: team ID is required")
-		return nil, fmt.Errorf("%s: team ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if input.Title == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", input.TeamID).
-			Msg("create task failed: title is required")
-		return nil, fmt.Errorf("%s: title is required: %w", op, domain.ErrInvalidInput)
-	}
-
-	// Check permission (any team member can create tasks)
-	if err := s.rbacSvc.CanCreateTask(ctx, input.TeamID, creatorID); err != nil {
-		s.log.Warn().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", input.TeamID).
-			Str("creator_id", creatorID).
-			Msg("create task failed: permission denied")
+// CreateTask creates a task in a team the caller belongs to. The caller is
+// the creator; the assignee defaults to the caller and must be a member.
+func (s *taskService) CreateTask(ctx context.Context, userID string, req *domain.CreateTaskRequest) (*domain.Task, error) {
+	if _, err := memberRole(ctx, s.teams, req.TeamID, userID); err != nil {
 		return nil, err
 	}
 
-	// Set default assignee to creator if not provided
-	if input.AssigneeID == nil || *input.AssigneeID == "" {
-		input.AssigneeID = &creatorID
+	assignee := userID
+	if req.AssigneeID != nil && *req.AssigneeID != "" {
+		assignee = *req.AssigneeID
+	}
+	if err := s.requireMember(ctx, req.TeamID, assignee); err != nil {
+		return nil, err
 	}
 
-	// Validate assignee is a team member
-	isMember, err := s.teamRepo.IsTeamMember(ctx, input.TeamID, *input.AssigneeID)
-	if err != nil {
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", input.TeamID).
-			Str("assignee_id", *input.AssigneeID).
-			Msg("check assignee membership failed")
-		return nil, fmt.Errorf("%s: check assignee membership: %w", op, err)
-	}
-
-	if !isMember {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", input.TeamID).
-			Str("assignee_id", *input.AssigneeID).
-			Msg("create task failed: assignee not in team")
-		return nil, fmt.Errorf("%s: assignee must be a team member: %w", op, domain.ErrAssigneeNotInTeam)
-	}
-
-	// Create task object
-	now := time.Now()
+	now := s.now()
 	task := &domain.Task{
 		ID:          uuid.NewString(),
-		TeamID:      input.TeamID,
-		Title:       strings.TrimSpace(input.Title),
-		Description: strings.TrimSpace(input.Description),
+		TeamID:      req.TeamID,
+		Title:       strings.TrimSpace(req.Title),
+		Description: strings.TrimSpace(req.Description),
 		Status:      domain.TaskStatusTodo,
-		CreatedBy:   creatorID,
-		AssigneeID:  input.AssigneeID,
+		CreatedBy:   userID,
+		AssigneeID:  &assignee,
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		ClosedAt:    nil,
 		Version:     1,
 	}
 
-	// Save to database
-	if err := s.taskRepo.Create(ctx, task); err != nil {
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", task.ID).
-			Str("team_id", task.TeamID).
-			Str("creator_id", creatorID).
-			Msg("create task failed: repository error")
-		return nil, fmt.Errorf("%s: create task: %w", op, err)
-	}
-
-	// Invalidate cache
-	if err := s.taskCache.InvalidateTeamTasks(ctx, task.TeamID); err != nil {
-		s.log.Warn().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", task.TeamID).
-			Msg("cache invalidation failed")
-	}
-
-	s.log.Info().
-		Str("request_id", requestID).
-		Str("op", op).
-		Str("task_id", task.ID).
-		Str("team_id", task.TeamID).
-		Str("creator_id", creatorID).
-		Str("assignee_id", *input.AssigneeID).
-		Str("title", task.Title).
-		Msg("task created successfully")
-
-	return task, nil
-}
-
-// ListTasksByTeam lists tasks with filters and pagination
-func (s *taskService) ListTasksByTeam(ctx context.Context, userID string, query *domain.TaskListQuery) (*domain.TaskListResponse, error) {
-	const op = "taskService.ListTasksByTeam"
-	requestID := logger.RequestIDFromContext(ctx)
-
-	// Input validation
-	if userID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("list tasks failed: user ID is required")
-		return nil, fmt.Errorf("%s: user ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if query == nil {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("list tasks failed: query is required")
-		return nil, fmt.Errorf("%s: query is required: %w", op, domain.ErrInvalidInput)
-	}
-	if query.TeamID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("list tasks failed: team ID is required")
-		return nil, fmt.Errorf("%s: team ID is required: %w", op, domain.ErrInvalidInput)
-	}
-
-	// Check membership
-	isMember, err := s.teamRepo.IsTeamMember(ctx, query.TeamID, userID)
-	if err != nil {
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", query.TeamID).
-			Str("user_id", userID).
-			Msg("check team membership failed")
-		return nil, fmt.Errorf("%s: check membership: %w", op, err)
-	}
-	if !isMember {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", query.TeamID).
-			Str("user_id", userID).
-			Msg("list tasks failed: not team member")
-		return nil, domain.ErrForbidden
-	}
-
-	// Try cache first
-	if cached, found, err := s.taskCache.GetTasks(ctx, query); err == nil && found {
-		s.log.Debug().
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", query.TeamID).
-			Msg("list tasks: cache hit")
-		return cached, nil
-	}
-
-	// Get from database
-	tasks, err := s.taskRepo.ListByTeam(ctx, query)
-	if err != nil {
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", query.TeamID).
-			Msg("list tasks failed: repository error")
-		return nil, fmt.Errorf("%s: list tasks: %w", op, err)
-	}
-
-	// Get total count for pagination
-	total, err := s.taskRepo.CountByTeam(ctx, query)
-	if err != nil {
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", query.TeamID).
-			Msg("count tasks failed")
-		return nil, fmt.Errorf("%s: count tasks: %w", op, err)
-	}
-
-	// Build response
-	response := &domain.TaskListResponse{
-		Tasks:   tasks,
-		Total:   total,
-		Limit:   query.Limit,
-		Offset:  query.Offset,
-		HasMore: query.Offset+len(tasks) < total,
-	}
-
-	// Cache the result
-	if err := s.taskCache.SetTasks(ctx, query, response); err != nil {
-		s.log.Warn().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", query.TeamID).
-			Msg("cache tasks failed")
-	}
-
-	s.log.Info().
-		Str("request_id", requestID).
-		Str("op", op).
-		Str("team_id", query.TeamID).
-		Str("user_id", userID).
-		Int("tasks_count", len(tasks)).
-		Int("total", total).
-		Bool("has_more", response.HasMore).
-		Msg("tasks listed successfully")
-
-	return response, nil
-}
-
-// UpdateTask updates task with permission checks and history recording
-func (s *taskService) UpdateTask(ctx context.Context, userID string, taskID string, input *domain.UpdateTaskRequest) (*domain.Task, error) {
-	const op = "taskService.UpdateTask"
-	requestID := logger.RequestIDFromContext(ctx)
-
-	// Input validation
-	if userID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("update task failed: user ID is required")
-		return nil, fmt.Errorf("%s: user ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if taskID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("update task failed: task ID is required")
-		return nil, fmt.Errorf("%s: task ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if input == nil {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Msg("update task failed: input is required")
-		return nil, fmt.Errorf("%s: input is required: %w", op, domain.ErrInvalidInput)
-	}
-
-	// Get current task
-	currentTask, err := s.taskRepo.GetByID(ctx, taskID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			s.log.Warn().
-				Str("request_id", requestID).
-				Str("op", op).
-				Str("task_id", taskID).
-				Msg("update task failed: task not found")
-			return nil, domain.ErrNotFound
-		}
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Msg("get task failed")
-		return nil, fmt.Errorf("%s: get task: %w", op, err)
-	}
-
-	// Check version conflict
-	if input.Version != currentTask.Version {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Int("expected_version", input.Version).
-			Int("current_version", currentTask.Version).
-			Msg("update task failed: version conflict")
-		return nil, domain.ErrConflict
-	}
-
-	// Build updates map
-	updates := make(map[string]interface{})
-
-	// Check title update
-	if input.Title != nil {
-		if err := s.rbacSvc.CanEditTask(ctx, currentTask.TeamID, userID, currentTask.CreatedBy); err != nil {
-			s.log.Warn().
-				Err(err).
-				Str("request_id", requestID).
-				Str("op", op).
-				Str("task_id", taskID).
-				Str("user_id", userID).
-				Msg("update task failed: cannot edit title")
-			return nil, err
-		}
-		updates["title"] = strings.TrimSpace(*input.Title)
-	}
-
-	// Check description update
-	if input.Description != nil {
-		if err := s.rbacSvc.CanEditTask(ctx, currentTask.TeamID, userID, currentTask.CreatedBy); err != nil {
-			s.log.Warn().
-				Err(err).
-				Str("request_id", requestID).
-				Str("op", op).
-				Str("task_id", taskID).
-				Str("user_id", userID).
-				Msg("update task failed: cannot edit description")
-			return nil, err
-		}
-		updates["description"] = strings.TrimSpace(*input.Description)
-	}
-
-	// Check status update
-	if input.Status != nil {
-		if err := s.rbacSvc.CanChangeTaskStatus(ctx, currentTask.TeamID, userID, currentTask.CreatedBy, currentTask.AssigneeID); err != nil {
-			s.log.Warn().
-				Err(err).
-				Str("request_id", requestID).
-				Str("op", op).
-				Str("task_id", taskID).
-				Str("user_id", userID).
-				Msg("update task failed: cannot change status")
-			return nil, err
-		}
-		updates["status"] = *input.Status
-
-		// Handle closed_at
-		if *input.Status == domain.TaskStatusDone && currentTask.ClosedAt == nil {
-			now := time.Now()
-			updates["closed_at"] = now
-		}
-		if *input.Status != domain.TaskStatusDone && currentTask.ClosedAt != nil {
-			updates["closed_at"] = nil
-		}
-	}
-
-	// Check assignee update
-	if input.AssigneeID != nil {
-		if err := s.rbacSvc.CanReassignTask(ctx, currentTask.TeamID, userID, currentTask.CreatedBy); err != nil {
-			s.log.Warn().
-				Err(err).
-				Str("request_id", requestID).
-				Str("op", op).
-				Str("task_id", taskID).
-				Str("user_id", userID).
-				Msg("update task failed: cannot reassign")
-			return nil, err
-		}
-
-		// Validate new assignee is team member
-		if *input.AssigneeID != "" {
-			isMember, err := s.teamRepo.IsTeamMember(ctx, currentTask.TeamID, *input.AssigneeID)
-			if err != nil {
-				s.log.Error().
-					Err(err).
-					Str("request_id", requestID).
-					Str("op", op).
-					Str("team_id", currentTask.TeamID).
-					Str("assignee_id", *input.AssigneeID).
-					Msg("check assignee membership failed")
-				return nil, fmt.Errorf("%s: check assignee membership: %w", op, err)
-			}
-			if !isMember {
-				s.log.Warn().
-					Str("request_id", requestID).
-					Str("op", op).
-					Str("task_id", taskID).
-					Str("assignee_id", *input.AssigneeID).
-					Msg("update task failed: assignee not in team")
-				return nil, domain.ErrAssigneeNotInTeam
-			}
-			updates["assignee_id"] = *input.AssigneeID
-		} else {
-			updates["assignee_id"] = nil
-		}
-	}
-
-	// Check if there are any updates
-	if len(updates) == 0 {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Msg("update task failed: no changes provided")
-		return nil, domain.ErrInvalidInput
-	}
-
-	// Update task with history
-	updatedTask, err := s.taskRepo.UpdateWithHistory(ctx, taskID, updates, userID, currentTask.Version)
-	if err != nil {
-		if errors.Is(err, domain.ErrConflict) {
-			s.log.Warn().
-				Str("request_id", requestID).
-				Str("op", op).
-				Str("task_id", taskID).
-				Msg("update task failed: concurrent modification")
-			return nil, domain.ErrConflict
-		}
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Msg("update task failed: repository error")
-		return nil, fmt.Errorf("%s: update task: %w", op, err)
-	}
-
-	// Invalidate cache
-	if err := s.taskCache.InvalidateTeamTasks(ctx, currentTask.TeamID); err != nil {
-		s.log.Warn().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", currentTask.TeamID).
-			Msg("cache invalidation failed")
-	}
-
-	s.log.Info().
-		Str("request_id", requestID).
-		Str("op", op).
-		Str("task_id", taskID).
-		Str("user_id", userID).
-		Interface("changes", updates).
-		Msg("task updated successfully")
-
-	return updatedTask, nil
-}
-
-// GetTaskHistory returns task change history
-func (s *taskService) GetTaskHistory(ctx context.Context, userID string, taskID string) ([]*domain.TaskHistory, error) {
-	const op = "taskService.GetTaskHistory"
-	requestID := logger.RequestIDFromContext(ctx)
-
-	// Input validation
-	if userID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("get task history failed: user ID is required")
-		return nil, fmt.Errorf("%s: user ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if taskID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("get task history failed: task ID is required")
-		return nil, fmt.Errorf("%s: task ID is required: %w", op, domain.ErrInvalidInput)
-	}
-
-	// Get task to check team
-	task, err := s.taskRepo.GetByID(ctx, taskID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			s.log.Warn().
-				Str("request_id", requestID).
-				Str("op", op).
-				Str("task_id", taskID).
-				Msg("get task history failed: task not found")
-			return nil, domain.ErrNotFound
-		}
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Msg("get task failed")
-		return nil, fmt.Errorf("%s: get task: %w", op, err)
-	}
-
-	// Check if user is team member
-	isMember, err := s.teamRepo.IsTeamMember(ctx, task.TeamID, userID)
-	if err != nil {
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", task.TeamID).
-			Str("user_id", userID).
-			Msg("check membership failed")
-		return nil, fmt.Errorf("%s: check membership: %w", op, err)
-	}
-	if !isMember {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", task.TeamID).
-			Str("user_id", userID).
-			Msg("get task history failed: not team member")
-		return nil, domain.ErrForbidden
-	}
-
-	// Get history
-	history, err := s.taskRepo.GetHistory(ctx, taskID)
-	if err != nil {
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Msg("get history failed")
-		return nil, fmt.Errorf("%s: get history: %w", op, err)
-	}
-
-	s.log.Info().
-		Str("request_id", requestID).
-		Str("op", op).
-		Str("task_id", taskID).
-		Str("user_id", userID).
-		Int("history_count", len(history)).
-		Msg("task history retrieved successfully")
-
-	return history, nil
-}
-
-// AddComment adds a comment to a task
-func (s *taskService) AddComment(ctx context.Context, userID string, taskID string, input *domain.CreateCommentRequest) (*domain.TaskComment, error) {
-	const op = "taskService.AddComment"
-	requestID := logger.RequestIDFromContext(ctx)
-
-	// Input validation
-	if userID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("add comment failed: user ID is required")
-		return nil, fmt.Errorf("%s: user ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if taskID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("add comment failed: task ID is required")
-		return nil, fmt.Errorf("%s: task ID is required: %w", op, domain.ErrInvalidInput)
-	}
-	if input == nil || input.Content == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Msg("add comment failed: content is required")
-		return nil, fmt.Errorf("%s: content is required: %w", op, domain.ErrInvalidInput)
-	}
-
-	// Get task to check team
-	task, err := s.taskRepo.GetByID(ctx, taskID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			s.log.Warn().
-				Str("request_id", requestID).
-				Str("op", op).
-				Str("task_id", taskID).
-				Msg("add comment failed: task not found")
-			return nil, domain.ErrNotFound
-		}
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Msg("get task failed")
-		return nil, fmt.Errorf("%s: get task: %w", op, err)
-	}
-
-	// Check permission (any team member can comment)
-	if err := s.rbacSvc.CanCommentOnTask(ctx, task.TeamID, userID); err != nil {
-		s.log.Warn().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Str("user_id", userID).
-			Str("team_id", task.TeamID).
-			Msg("add comment failed: permission denied")
+	if err := s.tasks.Create(ctx, task); err != nil {
 		return nil, err
 	}
 
-	// Create comment
+	s.invalidate(ctx, task.TeamID)
+
+	logger.FromContext(ctx).Info().Str("task_id", task.ID).Str("team_id", task.TeamID).Msg("task created")
+	return task, nil
+}
+
+// ListTasks returns a page of the team's tasks. Membership is checked
+// before the cache is consulted, so cached data never leaks across teams.
+func (s *taskService) ListTasks(ctx context.Context, userID string, q *domain.TaskListQuery) (*domain.TaskListResponse, error) {
+	if _, err := memberRole(ctx, s.teams, q.TeamID, userID); err != nil {
+		return nil, err
+	}
+
+	normalizePage(q)
+
+	if cached, ok, err := s.cache.Get(ctx, q); err != nil {
+		logger.FromContext(ctx).Warn().Err(err).Msg("task cache read failed")
+	} else if ok {
+		return cached, nil
+	}
+
+	tasks, err := s.tasks.List(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	total, err := s.tasks.Count(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &domain.TaskListResponse{
+		Tasks:   tasks,
+		Total:   total,
+		Limit:   q.Limit,
+		Offset:  q.Offset,
+		HasMore: q.Offset+len(tasks) < total,
+	}
+
+	if err := s.cache.Set(ctx, q, resp); err != nil {
+		logger.FromContext(ctx).Warn().Err(err).Msg("task cache write failed")
+	}
+
+	return resp, nil
+}
+
+// UpdateTask applies a partial update.
+//
+// Concurrency: the row is locked (SELECT ... FOR UPDATE) for the whole
+// transaction and the client's version must match the locked row. Two
+// concurrent writers are therefore serialised: the second one sees the
+// bumped version and gets ErrVersionConflict instead of silently
+// overwriting the first. Permissions and the history diff are computed
+// from that same locked, up-to-date row, and the update plus its history
+// entry commit atomically.
+func (s *taskService) UpdateTask(ctx context.Context, userID, taskID string, req *domain.UpdateTaskRequest) (*domain.Task, error) {
+	if req.IsEmpty() {
+		return nil, domain.ErrInvalidInput.WithMessage("at least one field must be provided")
+	}
+
+	var (
+		updated *domain.Task
+		changed bool
+	)
+
+	err := s.tx.WithinTx(ctx, func(ctx context.Context) error {
+		task, err := s.tasks.GetByIDForUpdate(ctx, taskID)
+		if err != nil {
+			return err
+		}
+
+		role, err := s.teams.GetMemberRole(ctx, task.TeamID, userID)
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.ErrNotFound.WithMessage("task not found")
+		}
+		if err != nil {
+			return err
+		}
+
+		if req.Version != task.Version {
+			return domain.ErrVersionConflict.WithMessage(
+				fmt.Sprintf("task was modified (current version %d, yours %d); reload and retry", task.Version, req.Version))
+		}
+
+		changes, err := s.applyUpdate(ctx, role, userID, task, req)
+		if err != nil {
+			return err
+		}
+		updated = task
+		if len(changes) == 0 {
+			return nil // nothing actually differs: no write, no history
+		}
+		changed = true
+
+		expected := task.Version
+		task.UpdatedAt = s.now()
+		if err := s.tasks.Update(ctx, task, expected); err != nil {
+			return err
+		}
+
+		raw, err := json.Marshal(changes)
+		if err != nil {
+			return fmt.Errorf("marshal task changes: %w", err)
+		}
+		return s.tasks.AddHistory(ctx, &domain.TaskHistory{
+			TaskID:    task.ID,
+			ChangedBy: userID,
+			Changes:   raw,
+			CreatedAt: task.UpdatedAt,
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if changed {
+		s.invalidate(ctx, updated.TeamID)
+		logger.FromContext(ctx).Info().Str("task_id", updated.ID).Int("version", updated.Version).Msg("task updated")
+	}
+
+	return updated, nil
+}
+
+// applyUpdate checks permissions for every field the request touches,
+// mutates task in place and returns the old/new diff of fields that really
+// changed.
+func (s *taskService) applyUpdate(
+	ctx context.Context,
+	role domain.Role,
+	userID string,
+	task *domain.Task,
+	req *domain.UpdateTaskRequest,
+) (domain.TaskChanges, error) {
+	perms := TaskPermissionsFor(role, userID, task)
+	if !perms.Any() {
+		return nil, domain.ErrForbidden.WithMessage("you can only edit tasks you created or are assigned to")
+	}
+
+	changes := domain.TaskChanges{}
+
+	if req.Title != nil {
+		if title := strings.TrimSpace(*req.Title); title != task.Title {
+			if !perms.EditContent {
+				return nil, domain.ErrForbidden.WithMessage("only the task creator or a team manager can change the title")
+			}
+			changes["title"] = domain.FieldChange{Old: task.Title, New: title}
+			task.Title = title
+		}
+	}
+
+	if req.Description != nil {
+		if desc := strings.TrimSpace(*req.Description); desc != task.Description {
+			if !perms.EditContent {
+				return nil, domain.ErrForbidden.WithMessage("only the task creator or a team manager can change the description")
+			}
+			changes["description"] = domain.FieldChange{Old: task.Description, New: desc}
+			task.Description = desc
+		}
+	}
+
+	if req.Status != nil && *req.Status != task.Status {
+		if !perms.ChangeStatus {
+			return nil, domain.ErrForbidden.WithMessage("you cannot change the status of this task")
+		}
+		changes["status"] = domain.FieldChange{Old: task.Status, New: *req.Status}
+		task.Status = *req.Status
+
+		// closed_at tracks when the task reached "done"; reopening clears it.
+		switch {
+		case task.Status == domain.TaskStatusDone && task.ClosedAt == nil:
+			now := s.now()
+			changes["closed_at"] = domain.FieldChange{Old: nil, New: now}
+			task.ClosedAt = &now
+		case task.Status != domain.TaskStatusDone && task.ClosedAt != nil:
+			changes["closed_at"] = domain.FieldChange{Old: *task.ClosedAt, New: nil}
+			task.ClosedAt = nil
+		}
+	}
+
+	if req.AssigneeID != nil {
+		var next *string
+		if *req.AssigneeID != "" {
+			next = req.AssigneeID
+		}
+		if !sameAssignee(task.AssigneeID, next) {
+			if !perms.Reassign {
+				return nil, domain.ErrForbidden.WithMessage("assignees can change the status but cannot reassign the task")
+			}
+			if next != nil {
+				if err := s.requireMember(ctx, task.TeamID, *next); err != nil {
+					return nil, err
+				}
+			}
+			changes["assignee_id"] = domain.FieldChange{Old: task.AssigneeID, New: next}
+			task.AssigneeID = next
+		}
+	}
+
+	return changes, nil
+}
+
+func (s *taskService) GetHistory(ctx context.Context, userID, taskID string) ([]*domain.TaskHistory, error) {
+	if err := requireTaskVisible(ctx, s.tasks, s.teams, taskID, userID); err != nil {
+		return nil, err
+	}
+	return s.tasks.ListHistory(ctx, taskID)
+}
+
+func (s *taskService) AddComment(ctx context.Context, userID, taskID string, req *domain.CreateCommentRequest) (*domain.TaskComment, error) {
+	if err := requireTaskVisible(ctx, s.tasks, s.teams, taskID, userID); err != nil {
+		return nil, err
+	}
+
 	comment := &domain.TaskComment{
 		ID:        uuid.NewString(),
 		TaskID:    taskID,
 		UserID:    userID,
-		Content:   strings.TrimSpace(input.Content),
-		CreatedAt: time.Now(),
+		Content:   strings.TrimSpace(req.Content),
+		CreatedAt: s.now(),
 	}
-
-	if err := s.taskRepo.AddComment(ctx, comment); err != nil {
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Str("user_id", userID).
-			Str("comment_id", comment.ID).
-			Msg("add comment failed: repository error")
-		return nil, fmt.Errorf("%s: add comment: %w", op, err)
+	if err := s.tasks.AddComment(ctx, comment); err != nil {
+		return nil, err
 	}
-
-	s.log.Info().
-		Str("request_id", requestID).
-		Str("op", op).
-		Str("task_id", taskID).
-		Str("user_id", userID).
-		Str("comment_id", comment.ID).
-		Int("content_length", len(comment.Content)).
-		Msg("comment added successfully")
-
 	return comment, nil
 }
 
-// ListComments returns all comments for a task
-func (s *taskService) ListComments(ctx context.Context, userID string, taskID string) ([]*domain.TaskComment, error) {
-	const op = "taskService.ListComments"
-	requestID := logger.RequestIDFromContext(ctx)
-
-	// Input validation
-	if userID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("list comments failed: user ID is required")
-		return nil, fmt.Errorf("%s: user ID is required: %w", op, domain.ErrInvalidInput)
+func (s *taskService) ListComments(ctx context.Context, userID, taskID string) ([]*domain.TaskComment, error) {
+	if err := requireTaskVisible(ctx, s.tasks, s.teams, taskID, userID); err != nil {
+		return nil, err
 	}
-	if taskID == "" {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Msg("list comments failed: task ID is required")
-		return nil, fmt.Errorf("%s: task ID is required: %w", op, domain.ErrInvalidInput)
-	}
+	return s.tasks.ListComments(ctx, taskID)
+}
 
-	// Get task to check team
-	task, err := s.taskRepo.GetByID(ctx, taskID)
+// requireMember fails with ErrAssigneeNotInTeam when userID is not in teamID.
+func (s *taskService) requireMember(ctx context.Context, teamID, userID string) error {
+	ok, err := s.teams.IsMember(ctx, teamID, userID)
 	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			s.log.Warn().
-				Str("request_id", requestID).
-				Str("op", op).
-				Str("task_id", taskID).
-				Msg("list comments failed: task not found")
-			return nil, domain.ErrNotFound
-		}
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Msg("get task failed")
-		return nil, fmt.Errorf("%s: get task: %w", op, err)
+		return err
 	}
-
-	// Check if user is team member
-	isMember, err := s.teamRepo.IsTeamMember(ctx, task.TeamID, userID)
-	if err != nil {
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", task.TeamID).
-			Str("user_id", userID).
-			Msg("check membership failed")
-		return nil, fmt.Errorf("%s: check membership: %w", op, err)
+	if !ok {
+		return domain.ErrAssigneeNotInTeam
 	}
-	if !isMember {
-		s.log.Warn().
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("team_id", task.TeamID).
-			Str("user_id", userID).
-			Msg("list comments failed: not team member")
-		return nil, domain.ErrForbidden
+	return nil
+}
+
+func (s *taskService) invalidate(ctx context.Context, teamID string) {
+	if err := s.cache.InvalidateTeam(ctx, teamID); err != nil {
+		logger.FromContext(ctx).Warn().Err(err).Str("team_id", teamID).Msg("task cache invalidation failed")
 	}
+}
 
-	// Get comments
-	comments, err := s.taskRepo.ListComments(ctx, taskID)
-	if err != nil {
-		s.log.Error().
-			Err(err).
-			Str("request_id", requestID).
-			Str("op", op).
-			Str("task_id", taskID).
-			Msg("list comments failed: repository error")
-		return nil, fmt.Errorf("%s: list comments: %w", op, err)
+func normalizePage(q *domain.TaskListQuery) {
+	if q.Limit <= 0 {
+		q.Limit = DefaultPageSize
 	}
+	if q.Limit > MaxPageSize {
+		q.Limit = MaxPageSize
+	}
+	if q.Offset < 0 {
+		q.Offset = 0
+	}
+}
 
-	s.log.Info().
-		Str("request_id", requestID).
-		Str("op", op).
-		Str("task_id", taskID).
-		Str("user_id", userID).
-		Int("comments_count", len(comments)).
-		Msg("comments listed successfully")
-
-	return comments, nil
+func sameAssignee(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

@@ -2,445 +2,315 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
-	"github.com/rs/zerolog"
-
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/internal/service"
-	"github.com/ramisoul84/task-management/pkg/logger"
 )
 
-func newTaskService(
-	t *testing.T,
-	taskRepo *fakeTaskRepo,
-	taskCache *fakeTaskCache,
-	teamRepo *fakeTeamRepo,
-	rbac *fakeRBAC,
-) service.TaskService {
+const (
+	teamA = "team-a"
+	teamB = "team-b"
+	taskT = "task-1"
+)
+
+type taskFixture struct {
+	s     *store
+	tx    *fakeTx
+	cache *fakeTaskCache
+	svc   service.TaskService
+}
+
+// newTaskFixture builds team A (owner, admin, creator, assignee, other) and
+// team B (outsider) with one task in team A created by "creator" and
+// assigned to "assignee".
+func newTaskFixture(t *testing.T) *taskFixture {
 	t.Helper()
+	s := newStore()
+	for _, u := range []string{"owner", "admin", "creator", "assignee", "other", "outsider"} {
+		s.addUser(u)
+	}
+	s.addTeam(teamA, "owner")
+	s.addMember(teamA, "admin", admin)
+	s.addMember(teamA, "creator", member)
+	s.addMember(teamA, "assignee", member)
+	s.addMember(teamA, "other", member)
+	s.addTeam(teamB, "outsider")
 
-	l := logger.New("debug", "test", false, "stdout")
-	l.Logger = l.Logger.Level(zerolog.Disabled)
+	assignee := "assignee"
+	s.addTask(domain.Task{ID: taskT, TeamID: teamA, Title: "Original", CreatedBy: "creator", AssigneeID: &assignee})
 
-	return service.NewTaskService(taskRepo, taskCache, teamRepo, rbac, l)
+	tx := &fakeTx{}
+	cache := newFakeTaskCache()
+	return &taskFixture{
+		s:     s,
+		tx:    tx,
+		cache: cache,
+		svc:   service.NewTaskService(tx, taskRepo{s}, teamRepo{s}, cache),
+	}
 }
 
-// ==================== TESTS ====================
+func ptr[T any](v T) *T { return &v }
 
-func TestTaskService_CreateTask(t *testing.T) {
+func TestCreateTask(t *testing.T) {
 	ctx := context.Background()
 
-	validInput := &domain.CreateTaskRequest{
-		TeamID:      "team-1",
-		Title:       "Fix login bug",
-		Description: "Users cannot login",
+	t.Run("member creates task; defaults assignee to self", func(t *testing.T) {
+		f := newTaskFixture(t)
+		task, err := f.svc.CreateTask(ctx, "other", &domain.CreateTaskRequest{TeamID: teamA, Title: "  New task  "})
+		wantErr(t, err, nil)
+
+		if task.CreatedBy != "other" || task.AssigneeID == nil || *task.AssigneeID != "other" {
+			t.Fatalf("creator/assignee = %s/%v, want other/other", task.CreatedBy, task.AssigneeID)
+		}
+		if task.Title != "New task" || task.Status != domain.TaskStatusTodo || task.Version != 1 {
+			t.Fatalf("unexpected task: %+v", task)
+		}
+		if len(f.cache.invalidated) != 1 || f.cache.invalidated[0] != teamA {
+			t.Fatalf("cache invalidations = %v, want [team-a]", f.cache.invalidated)
+		}
+	})
+
+	t.Run("non-member cannot create in someone else's team", func(t *testing.T) {
+		f := newTaskFixture(t)
+		_, err := f.svc.CreateTask(ctx, "outsider", &domain.CreateTaskRequest{TeamID: teamA, Title: "Sneaky"})
+		wantErr(t, err, domain.ErrForbidden)
+	})
+
+	t.Run("assignee from another team is rejected", func(t *testing.T) {
+		f := newTaskFixture(t)
+		_, err := f.svc.CreateTask(ctx, "creator", &domain.CreateTaskRequest{
+			TeamID: teamA, Title: "Task", AssigneeID: ptr("outsider"),
+		})
+		wantErr(t, err, domain.ErrAssigneeNotInTeam)
+	})
+
+	t.Run("repository failure propagates", func(t *testing.T) {
+		f := newTaskFixture(t)
+		f.s.failNext = errBoom
+		_, err := f.svc.CreateTask(ctx, "creator", &domain.CreateTaskRequest{TeamID: teamA, Title: "Task"})
+		if !errors.Is(err, errBoom) {
+			t.Fatalf("error = %v, want boom", err)
+		}
+	})
+}
+
+func TestListTasks(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("applies default page size and caches result", func(t *testing.T) {
+		f := newTaskFixture(t)
+		q := &domain.TaskListQuery{TeamID: teamA}
+
+		res, err := f.svc.ListTasks(ctx, "other", q)
+		wantErr(t, err, nil)
+		if res.Total != 1 || len(res.Tasks) != 1 || res.Limit != service.DefaultPageSize || res.HasMore {
+			t.Fatalf("unexpected page: %+v", res)
+		}
+		if len(f.cache.entries) != 1 {
+			t.Fatalf("expected result to be cached")
+		}
+
+		// Second call is served from cache even if the store changes.
+		f.s.addTask(domain.Task{ID: "task-2", TeamID: teamA, CreatedBy: "owner"})
+		res, err = f.svc.ListTasks(ctx, "other", &domain.TaskListQuery{TeamID: teamA})
+		wantErr(t, err, nil)
+		if res.Total != 1 {
+			t.Fatalf("expected cached total 1, got %d", res.Total)
+		}
+	})
+
+	t.Run("non-member is rejected before the cache is read", func(t *testing.T) {
+		f := newTaskFixture(t)
+		_, err := f.svc.ListTasks(ctx, "outsider", &domain.TaskListQuery{TeamID: teamA})
+		wantErr(t, err, domain.ErrForbidden)
+	})
+
+	t.Run("cache errors fall back to the database", func(t *testing.T) {
+		f := newTaskFixture(t)
+		f.cache.getErr = errBoom
+		res, err := f.svc.ListTasks(ctx, "owner", &domain.TaskListQuery{TeamID: teamA})
+		wantErr(t, err, nil)
+		if res.Total != 1 {
+			t.Fatalf("total = %d, want 1", res.Total)
+		}
+	})
+
+	t.Run("limit is capped", func(t *testing.T) {
+		f := newTaskFixture(t)
+		res, err := f.svc.ListTasks(ctx, "owner", &domain.TaskListQuery{TeamID: teamA, Limit: 10_000})
+		wantErr(t, err, nil)
+		if res.Limit != service.MaxPageSize {
+			t.Fatalf("limit = %d, want %d", res.Limit, service.MaxPageSize)
+		}
+	})
+}
+
+func TestUpdateTask_Permissions(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		user string
+		req  domain.UpdateTaskRequest
+		want error
+	}{
+		{"owner edits title", "owner", domain.UpdateTaskRequest{Title: ptr("Owner edit")}, nil},
+		{"admin reassigns", "admin", domain.UpdateTaskRequest{AssigneeID: ptr("other")}, nil},
+		{"creator edits everything", "creator", domain.UpdateTaskRequest{
+			Title: ptr("New"), Description: ptr("d"), Status: ptr(domain.TaskStatusReview), AssigneeID: ptr("other"),
+		}, nil},
+		{"assignee changes status", "assignee", domain.UpdateTaskRequest{Status: ptr(domain.TaskStatusInProgress)}, nil},
+		{"assignee cannot edit title", "assignee", domain.UpdateTaskRequest{Title: ptr("Hijack")}, domain.ErrForbidden},
+		{"assignee cannot reassign", "assignee", domain.UpdateTaskRequest{AssigneeID: ptr("other")}, domain.ErrForbidden},
+		{"unrelated member cannot edit", "other", domain.UpdateTaskRequest{Status: ptr(domain.TaskStatusDone)}, domain.ErrForbidden},
+		{"outsider sees not found", "outsider", domain.UpdateTaskRequest{Title: ptr("x")}, domain.ErrNotFound},
+		{"assignee must be in team", "owner", domain.UpdateTaskRequest{AssigneeID: ptr("outsider")}, domain.ErrAssigneeNotInTeam},
 	}
 
-	t.Run("success_creates_task", func(t *testing.T) {
-		taskRepo := &fakeTaskRepo{}
-		taskCache := &fakeTaskCache{}
-		teamRepo := &fakeTeamRepo{isMember: true}
-		rbac := &fakeRBAC{}
-		svc := newTaskService(t, taskRepo, taskCache, teamRepo, rbac)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newTaskFixture(t)
+			tc.req.Version = 1
 
-		task, err := svc.CreateTask(ctx, "user-1", validInput)
+			_, err := f.svc.UpdateTask(ctx, tc.user, taskT, &tc.req)
+			wantErr(t, err, tc.want)
 
-		if err != nil {
-			t.Fatalf("CreateTask() error = %v", err)
-		}
-		if task == nil {
-			t.Fatal("CreateTask() = nil")
-		}
-		if task.ID == "" {
-			t.Error("task.ID is empty")
-		}
-		if task.TeamID != "team-1" {
-			t.Errorf("TeamID = %q, want team-1", task.TeamID)
-		}
-		if task.Title != "Fix login bug" {
-			t.Errorf("Title = %q, want 'Fix login bug'", task.Title)
-		}
-		if task.Status != domain.TaskStatusTodo {
-			t.Errorf("Status = %q, want todo", task.Status)
-		}
-		if task.CreatedBy != "user-1" {
-			t.Errorf("CreatedBy = %q, want user-1", task.CreatedBy)
-		}
-		if task.AssigneeID == nil || *task.AssigneeID != "user-1" {
-			t.Error("AssigneeID should default to creator")
-		}
-		if task.Version != 1 {
-			t.Errorf("Version = %d, want 1", task.Version)
-		}
-		if len(taskRepo.created) != 1 {
-			t.Errorf("Create called %d times, want 1", len(taskRepo.created))
-		}
-		if taskCache.invCalled != 1 {
-			t.Errorf("InvalidateTeamTasks called %d times, want 1", taskCache.invCalled)
-		}
-	})
-
-	t.Run("empty_creator_id", func(t *testing.T) {
-		svc := newTaskService(t, &fakeTaskRepo{}, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-		_, err := svc.CreateTask(ctx, "", validInput)
-		if !errors.Is(err, domain.ErrInvalidInput) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrInvalidInput)
-		}
-	})
-
-	t.Run("nil_input", func(t *testing.T) {
-		svc := newTaskService(t, &fakeTaskRepo{}, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-		_, err := svc.CreateTask(ctx, "user-1", nil)
-		if !errors.Is(err, domain.ErrInvalidInput) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrInvalidInput)
-		}
-	})
-
-	t.Run("empty_title", func(t *testing.T) {
-		svc := newTaskService(t, &fakeTaskRepo{}, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-		input := &domain.CreateTaskRequest{TeamID: "team-1", Title: ""}
-		_, err := svc.CreateTask(ctx, "user-1", input)
-		if !errors.Is(err, domain.ErrInvalidInput) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrInvalidInput)
-		}
-	})
-
-	t.Run("rbac_denial", func(t *testing.T) {
-		rbac := &fakeRBAC{}
-		svc := newTaskService(t, &fakeTaskRepo{}, &fakeTaskCache{}, &fakeTeamRepo{isMember: false}, rbac)
-		_, err := svc.CreateTask(ctx, "user-1", validInput)
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-	})
-
-	t.Run("assignee_not_in_team", func(t *testing.T) {
-		assigneeID := "ghost"
-		input := &domain.CreateTaskRequest{
-			TeamID:     "team-1",
-			Title:      "Test",
-			AssigneeID: &assigneeID,
-		}
-		teamRepo := &fakeTeamRepo{isMember: false} // assignee is not member
-		svc := newTaskService(t, &fakeTaskRepo{}, &fakeTaskCache{}, teamRepo, &fakeRBAC{})
-
-		_, err := svc.CreateTask(ctx, "user-1", input)
-		if !errors.Is(err, domain.ErrAssigneeNotInTeam) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrAssigneeNotInTeam)
-		}
-	})
-
-	t.Run("repo_error", func(t *testing.T) {
-		taskRepo := &fakeTaskRepo{createErr: errTaskRepoFailure}
-		teamRepo := &fakeTeamRepo{isMember: true}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, teamRepo, &fakeRBAC{})
-
-		_, err := svc.CreateTask(ctx, "user-1", validInput)
-		if !errors.Is(err, errTaskRepoFailure) {
-			t.Fatalf("error = %v, want %v", err, errTaskRepoFailure)
-		}
-	})
-}
-
-func TestTaskService_ListTasksByTeam(t *testing.T) {
-	ctx := context.Background()
-
-	query := &domain.TaskListQuery{
-		TeamID: "team-1",
-		Limit:  20,
-		Offset: 0,
+			stored := f.s.tasks[taskT]
+			if tc.want != nil && stored.Version != 1 {
+				t.Fatalf("rejected update must not persist (version %d)", stored.Version)
+			}
+			if tc.want == nil && stored.Version != 2 {
+				t.Fatalf("accepted update must bump version, got %d", stored.Version)
+			}
+		})
 	}
+}
 
-	t.Run("success_with_cache_miss", func(t *testing.T) {
-		wantTasks := []*domain.Task{{ID: "task-1", TeamID: "team-1", Title: "Task 1"}}
-		taskRepo := &fakeTaskRepo{tasksList: wantTasks, count: 1}
-		taskCache := &fakeTaskCache{found: false}
-		teamRepo := &fakeTeamRepo{isMember: true}
-		svc := newTaskService(t, taskRepo, taskCache, teamRepo, &fakeRBAC{})
+func TestUpdateTask_HistoryAndLifecycle(t *testing.T) {
+	ctx := context.Background()
 
-		result, err := svc.ListTasksByTeam(ctx, "user-1", query)
+	t.Run("records old and new values atomically", func(t *testing.T) {
+		f := newTaskFixture(t)
 
-		if err != nil {
-			t.Fatalf("error = %v", err)
-		}
-		if result.Total != 1 {
-			t.Errorf("Total = %d, want 1", result.Total)
-		}
-		if len(result.Tasks) != 1 {
-			t.Errorf("Tasks len = %d, want 1", len(result.Tasks))
-		}
-		if result.HasMore {
-			t.Error("HasMore = true, want false")
-		}
-	})
+		task, err := f.svc.UpdateTask(ctx, "creator", taskT, &domain.UpdateTaskRequest{
+			Title: ptr("Renamed"), Status: ptr(domain.TaskStatusDone), Version: 1,
+		})
+		wantErr(t, err, nil)
 
-	t.Run("success_with_cache_hit", func(t *testing.T) {
-		cached := &domain.TaskListResponse{
-			Tasks: []*domain.Task{{ID: "cached-task"}},
-			Total: 1,
+		if f.tx.calls != 1 {
+			t.Fatalf("expected update to run in one transaction, got %d", f.tx.calls)
 		}
-		taskCache := &fakeTaskCache{cached: cached, found: true}
-		teamRepo := &fakeTeamRepo{isMember: true}
-		svc := newTaskService(t, &fakeTaskRepo{}, taskCache, teamRepo, &fakeRBAC{})
-
-		result, err := svc.ListTasksByTeam(ctx, "user-1", query)
-
-		if err != nil {
-			t.Fatalf("error = %v", err)
+		if task.ClosedAt == nil {
+			t.Fatal("closed_at must be set when moving to done")
 		}
-		if result.Tasks[0].ID != "cached-task" {
-			t.Errorf("got %q, want cached-task", result.Tasks[0].ID)
+		if len(f.s.history) != 1 {
+			t.Fatalf("history entries = %d, want 1", len(f.s.history))
+		}
+
+		var changes map[string]map[string]any
+		if err := json.Unmarshal(f.s.history[0].Changes, &changes); err != nil {
+			t.Fatal(err)
+		}
+		if changes["title"]["old"] != "Original" || changes["title"]["new"] != "Renamed" {
+			t.Fatalf("title change = %v", changes["title"])
+		}
+		if changes["status"]["old"] != "todo" || changes["status"]["new"] != "done" {
+			t.Fatalf("status change = %v", changes["status"])
+		}
+		if _, ok := changes["closed_at"]; !ok {
+			t.Fatal("closed_at change missing from history")
+		}
+		if f.s.history[0].ChangedBy != "creator" {
+			t.Fatalf("changed_by = %s", f.s.history[0].ChangedBy)
 		}
 	})
 
-	t.Run("not_team_member", func(t *testing.T) {
-		teamRepo := &fakeTeamRepo{isMember: false}
-		svc := newTaskService(t, &fakeTaskRepo{}, &fakeTaskCache{}, teamRepo, &fakeRBAC{})
+	t.Run("reopening clears closed_at", func(t *testing.T) {
+		f := newTaskFixture(t)
+		_, err := f.svc.UpdateTask(ctx, "owner", taskT, &domain.UpdateTaskRequest{Status: ptr(domain.TaskStatusDone), Version: 1})
+		wantErr(t, err, nil)
 
-		_, err := svc.ListTasksByTeam(ctx, "user-1", query)
-		if !errors.Is(err, domain.ErrForbidden) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrForbidden)
+		task, err := f.svc.UpdateTask(ctx, "owner", taskT, &domain.UpdateTaskRequest{Status: ptr(domain.TaskStatusTodo), Version: 2})
+		wantErr(t, err, nil)
+		if task.ClosedAt != nil {
+			t.Fatal("closed_at must be cleared when reopening")
 		}
 	})
 
-	t.Run("empty_user_id", func(t *testing.T) {
-		svc := newTaskService(t, &fakeTaskRepo{}, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-		_, err := svc.ListTasksByTeam(ctx, "", query)
-		if !errors.Is(err, domain.ErrInvalidInput) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrInvalidInput)
+	t.Run("empty string unassigns", func(t *testing.T) {
+		f := newTaskFixture(t)
+		task, err := f.svc.UpdateTask(ctx, "owner", taskT, &domain.UpdateTaskRequest{AssigneeID: ptr(""), Version: 1})
+		wantErr(t, err, nil)
+		if task.AssigneeID != nil {
+			t.Fatalf("assignee = %v, want nil", *task.AssigneeID)
 		}
 	})
 
-	t.Run("repo_error", func(t *testing.T) {
-		taskRepo := &fakeTaskRepo{listErr: errTaskRepoFailure}
-		teamRepo := &fakeTeamRepo{isMember: true}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, teamRepo, &fakeRBAC{})
+	t.Run("stale version is a conflict", func(t *testing.T) {
+		f := newTaskFixture(t)
+		_, err := f.svc.UpdateTask(ctx, "owner", taskT, &domain.UpdateTaskRequest{Title: ptr("First"), Version: 1})
+		wantErr(t, err, nil)
 
-		_, err := svc.ListTasksByTeam(ctx, "user-1", query)
-		if !errors.Is(err, errTaskRepoFailure) {
-			t.Fatalf("error = %v, want %v", err, errTaskRepoFailure)
+		// A second writer that read version 1 must not overwrite the first.
+		_, err = f.svc.UpdateTask(ctx, "admin", taskT, &domain.UpdateTaskRequest{Title: ptr("Second"), Version: 1})
+		wantErr(t, err, domain.ErrVersionConflict)
+		if f.s.tasks[taskT].Title != "First" {
+			t.Fatalf("title = %q, lost update", f.s.tasks[taskT].Title)
 		}
+	})
+
+	t.Run("no-op update writes nothing", func(t *testing.T) {
+		f := newTaskFixture(t)
+		task, err := f.svc.UpdateTask(ctx, "owner", taskT, &domain.UpdateTaskRequest{Title: ptr("Original"), Version: 1})
+		wantErr(t, err, nil)
+		if task.Version != 1 || len(f.s.history) != 0 || len(f.cache.invalidated) != 0 {
+			t.Fatalf("no-op must not write: version=%d history=%d", task.Version, len(f.s.history))
+		}
+	})
+
+	t.Run("empty request is invalid", func(t *testing.T) {
+		f := newTaskFixture(t)
+		_, err := f.svc.UpdateTask(ctx, "owner", taskT, &domain.UpdateTaskRequest{Version: 1})
+		wantErr(t, err, domain.ErrInvalidInput)
+	})
+
+	t.Run("unknown task", func(t *testing.T) {
+		f := newTaskFixture(t)
+		_, err := f.svc.UpdateTask(ctx, "owner", "missing", &domain.UpdateTaskRequest{Title: ptr("x"), Version: 1})
+		wantErr(t, err, domain.ErrNotFound)
 	})
 }
 
-func TestTaskService_UpdateTask(t *testing.T) {
+func TestHistoryAndComments_Visibility(t *testing.T) {
 	ctx := context.Background()
+	f := newTaskFixture(t)
 
-	currentTask := &domain.Task{
-		ID:        "task-1",
-		TeamID:    "team-1",
-		Title:     "Old title",
-		Status:    domain.TaskStatusTodo,
-		CreatedBy: "user-1",
-		Version:   1,
-	}
-
-	t.Run("success_update_title", func(t *testing.T) {
-		title := "New title"
-		input := &domain.UpdateTaskRequest{
-			Title:   &title,
-			Version: 1,
+	t.Run("members can comment and read", func(t *testing.T) {
+		c, err := f.svc.AddComment(ctx, "other", taskT, &domain.CreateCommentRequest{Content: "  hello  "})
+		wantErr(t, err, nil)
+		if c.Content != "hello" || c.UserID != "other" {
+			t.Fatalf("unexpected comment: %+v", c)
 		}
-		taskRepo := &fakeTaskRepo{task: currentTask, updatedTask: currentTask}
-		teamRepo := &fakeTeamRepo{isMember: true}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, teamRepo, &fakeRBAC{})
 
-		task, err := svc.UpdateTask(ctx, "user-1", "task-1", input)
-
-		if err != nil {
-			t.Fatalf("error = %v", err)
-		}
-		if task == nil {
-			t.Fatal("task = nil")
-		}
-		if len(taskRepo.updateCalls) != 1 {
-			t.Fatalf("UpdateWithHistory called %d times", len(taskRepo.updateCalls))
-		}
-	})
-
-	t.Run("version_conflict", func(t *testing.T) {
-		input := &domain.UpdateTaskRequest{
-			Title:   strPtr("New"),
-			Version: 99,
-		}
-		taskRepo := &fakeTaskRepo{task: currentTask}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-
-		_, err := svc.UpdateTask(ctx, "user-1", "task-1", input)
-		if !errors.Is(err, domain.ErrConflict) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrConflict)
-		}
-	})
-
-	t.Run("task_not_found", func(t *testing.T) {
-		input := &domain.UpdateTaskRequest{Version: 1}
-		taskRepo := &fakeTaskRepo{getErr: domain.ErrNotFound}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-
-		_, err := svc.UpdateTask(ctx, "user-1", "ghost", input)
-		if !errors.Is(err, domain.ErrNotFound) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrNotFound)
-		}
-	})
-
-	t.Run("no_changes", func(t *testing.T) {
-		input := &domain.UpdateTaskRequest{Version: 1}
-		taskRepo := &fakeTaskRepo{task: currentTask}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-
-		_, err := svc.UpdateTask(ctx, "user-1", "task-1", input)
-		if !errors.Is(err, domain.ErrInvalidInput) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrInvalidInput)
-		}
-	})
-
-	t.Run("update_error", func(t *testing.T) {
-		title := "New"
-		input := &domain.UpdateTaskRequest{Title: &title, Version: 1}
-		taskRepo := &fakeTaskRepo{task: currentTask, updateErr: errTaskRepoFailure}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-
-		_, err := svc.UpdateTask(ctx, "user-1", "task-1", input)
-		if !errors.Is(err, errTaskRepoFailure) {
-			t.Fatalf("error = %v, want %v", err, errTaskRepoFailure)
-		}
-	})
-}
-
-func TestTaskService_GetTaskHistory(t *testing.T) {
-	ctx := context.Background()
-
-	task := &domain.Task{ID: "task-1", TeamID: "team-1"}
-
-	t.Run("success", func(t *testing.T) {
-		wantHistory := []*domain.TaskHistory{{ID: 1, TaskID: "task-1"}}
-		taskRepo := &fakeTaskRepo{task: task, history: wantHistory}
-		teamRepo := &fakeTeamRepo{isMember: true}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, teamRepo, &fakeRBAC{})
-
-		history, err := svc.GetTaskHistory(ctx, "user-1", "task-1")
-
-		if err != nil {
-			t.Fatalf("error = %v", err)
-		}
-		if len(history) != 1 {
-			t.Errorf("len = %d, want 1", len(history))
-		}
-	})
-
-	t.Run("not_team_member", func(t *testing.T) {
-		taskRepo := &fakeTaskRepo{task: task}
-		teamRepo := &fakeTeamRepo{isMember: false}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, teamRepo, &fakeRBAC{})
-
-		_, err := svc.GetTaskHistory(ctx, "user-1", "task-1")
-		if !errors.Is(err, domain.ErrForbidden) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrForbidden)
-		}
-	})
-
-	t.Run("task_not_found", func(t *testing.T) {
-		taskRepo := &fakeTaskRepo{getErr: domain.ErrNotFound}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-
-		_, err := svc.GetTaskHistory(ctx, "user-1", "ghost")
-		if !errors.Is(err, domain.ErrNotFound) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrNotFound)
-		}
-	})
-}
-
-func TestTaskService_AddComment(t *testing.T) {
-	ctx := context.Background()
-
-	task := &domain.Task{ID: "task-1", TeamID: "team-1"}
-
-	t.Run("success", func(t *testing.T) {
-		taskRepo := &fakeTaskRepo{task: task}
-		teamRepo := &fakeTeamRepo{isMember: true}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, teamRepo, &fakeRBAC{})
-
-		input := &domain.CreateCommentRequest{Content: "Great work!"}
-		comment, err := svc.AddComment(ctx, "user-1", "task-1", input)
-
-		if err != nil {
-			t.Fatalf("error = %v", err)
-		}
-		if comment == nil {
-			t.Fatal("comment = nil")
-		}
-		if comment.Content != "Great work!" {
-			t.Errorf("Content = %q", comment.Content)
-		}
-		if taskRepo.addedComment == nil {
-			t.Error("AddComment not called")
-		}
-	})
-
-	t.Run("empty_content", func(t *testing.T) {
-		svc := newTaskService(t, &fakeTaskRepo{}, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-		_, err := svc.AddComment(ctx, "user-1", "task-1", &domain.CreateCommentRequest{Content: ""})
-		if !errors.Is(err, domain.ErrInvalidInput) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrInvalidInput)
-		}
-	})
-
-	t.Run("task_not_found", func(t *testing.T) {
-		taskRepo := &fakeTaskRepo{getErr: domain.ErrNotFound}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-		_, err := svc.AddComment(ctx, "user-1", "ghost", &domain.CreateCommentRequest{Content: "Test"})
-		if !errors.Is(err, domain.ErrNotFound) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrNotFound)
-		}
-	})
-}
-
-func TestTaskService_ListComments(t *testing.T) {
-	ctx := context.Background()
-
-	task := &domain.Task{ID: "task-1", TeamID: "team-1"}
-
-	t.Run("success", func(t *testing.T) {
-		wantComments := []*domain.TaskComment{{ID: "c1", TaskID: "task-1"}}
-		taskRepo := &fakeTaskRepo{task: task, comments: wantComments}
-		teamRepo := &fakeTeamRepo{isMember: true}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, teamRepo, &fakeRBAC{})
-
-		comments, err := svc.ListComments(ctx, "user-1", "task-1")
-
-		if err != nil {
-			t.Fatalf("error = %v", err)
-		}
+		comments, err := f.svc.ListComments(ctx, "assignee", taskT)
+		wantErr(t, err, nil)
 		if len(comments) != 1 {
-			t.Errorf("len = %d, want 1", len(comments))
+			t.Fatalf("comments = %d, want 1", len(comments))
 		}
+
+		_, err = f.svc.GetHistory(ctx, "other", taskT)
+		wantErr(t, err, nil)
 	})
 
-	t.Run("not_team_member", func(t *testing.T) {
-		taskRepo := &fakeTaskRepo{task: task}
-		teamRepo := &fakeTeamRepo{isMember: false}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, teamRepo, &fakeRBAC{})
-
-		_, err := svc.ListComments(ctx, "user-1", "task-1")
-		if !errors.Is(err, domain.ErrForbidden) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrForbidden)
-		}
+	t.Run("outsiders cannot see that the task exists", func(t *testing.T) {
+		_, err := f.svc.ListComments(ctx, "outsider", taskT)
+		wantErr(t, err, domain.ErrNotFound)
+		_, err = f.svc.GetHistory(ctx, "outsider", taskT)
+		wantErr(t, err, domain.ErrNotFound)
+		_, err = f.svc.AddComment(ctx, "outsider", taskT, &domain.CreateCommentRequest{Content: "x"})
+		wantErr(t, err, domain.ErrNotFound)
 	})
-
-	t.Run("task_not_found", func(t *testing.T) {
-		taskRepo := &fakeTaskRepo{getErr: domain.ErrNotFound}
-		svc := newTaskService(t, taskRepo, &fakeTaskCache{}, &fakeTeamRepo{}, &fakeRBAC{})
-
-		_, err := svc.ListComments(ctx, "user-1", "ghost")
-		if !errors.Is(err, domain.ErrNotFound) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrNotFound)
-		}
-	})
-}
-
-// Helper
-func strPtr(s string) *string {
-	return &s
 }

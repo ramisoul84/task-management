@@ -7,19 +7,14 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 )
 
-// CORS returns CORS middleware
-func CORS(allowedOrigins string, allowCredentials bool) fiber.Handler {
-	origins := strings.Split(allowedOrigins, ",")
-	for i, origin := range origins {
-		origins[i] = strings.TrimSpace(origin)
-	}
-
+// CORS configures cross-origin access for browser clients.
+func CORS(origins []string, allowCredentials bool) fiber.Handler {
 	return cors.New(cors.Config{
 		AllowOrigins:     strings.Join(origins, ","),
 		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-		AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
+		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,If-Match,X-Request-ID",
 		AllowCredentials: allowCredentials,
-		ExposeHeaders:    "Content-Length,Retry-After",
-		MaxAge:           300,
+		ExposeHeaders:    "Content-Length,Retry-After,ETag,X-Request-ID,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset",
+		MaxAge:           600,
 	})
 }

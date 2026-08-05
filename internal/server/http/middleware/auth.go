@@ -6,58 +6,56 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/pkg/auth"
 )
 
-type contextKey string
-
-const userIDKey contextKey = "user_id"
+const userIDKey = "user_id"
 
 // TokenBlacklist reports whether an access token's jti has been revoked.
-type TokenCache interface {
+type TokenBlacklist interface {
 	IsAccessTokenBlacklisted(ctx context.Context, jti string) (bool, error)
 }
 
-func Auth(tokens auth.TokenService, tokenCache TokenCache) fiber.Handler {
+// Auth requires a valid, non-revoked Bearer access token.
+func Auth(tokens auth.TokenService, blacklist TokenBlacklist) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		header := c.Get(fiber.HeaderAuthorization)
-
-		const prefix = "Bearer "
-
-		if !strings.HasPrefix(header, prefix) {
-			return fiber.ErrUnauthorized
-		}
-
-		token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
-
-		if token == "" {
-			return fiber.ErrUnauthorized
+		token, ok := BearerToken(c)
+		if !ok {
+			return domain.ErrUnauthorized.WithMessage("missing or malformed Authorization header")
 		}
 
 		claims, err := tokens.ValidateAccessToken(token)
 		if err != nil {
-			return fiber.ErrUnauthorized
+			return domain.ErrUnauthorized.WithMessage("invalid or expired access token")
 		}
 
-		// Reject tokens that were revoked on logout.
-		if tokenCache != nil {
-			banned, err := tokenCache.IsAccessTokenBlacklisted(c.UserContext(), claims.JTI)
-			if err != nil {
-				return fiber.ErrUnauthorized
-			}
-			if banned {
-				return fiber.ErrUnauthorized
-			}
+		// Revoked on logout. Fail closed: if we cannot tell, deny.
+		revoked, err := blacklist.IsAccessTokenBlacklisted(c.UserContext(), claims.JTI)
+		if err != nil {
+			return domain.ErrInternal.Wrap(err)
+		}
+		if revoked {
+			return domain.ErrUnauthorized.WithMessage("access token has been revoked")
 		}
 
 		c.Locals(userIDKey, claims.UserID)
-
 		return c.Next()
 	}
 }
 
-func UserID(c *fiber.Ctx) (string, bool) {
-	userID, ok := c.Locals(userIDKey).(string)
+// BearerToken extracts the token from "Authorization: Bearer <token>".
+func BearerToken(c *fiber.Ctx) (string, bool) {
+	scheme, token, found := strings.Cut(c.Get(fiber.HeaderAuthorization), " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") {
+		return "", false
+	}
+	token = strings.TrimSpace(token)
+	return token, token != ""
+}
 
-	return userID, ok
+// UserID returns the authenticated user's ID.
+func UserID(c *fiber.Ctx) (string, bool) {
+	id, ok := c.Locals(userIDKey).(string)
+	return id, ok
 }
