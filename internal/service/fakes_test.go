@@ -2,461 +2,521 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/pkg/auth"
 )
 
-var (
-	errRepoFailure     = errors.New("repo failure")
-	errTaskRepoFailure = errors.New("task repo failure")
-)
+// These fakes are small in-memory implementations rather than stubs: they
+// enforce the same invariants as MySQL (unique keys, version checks), so
+// service tests exercise real behaviour, not scripted return values.
 
-// ==================== TEAM FAKES ====================
+var errBoom = errors.New("boom")
 
-// fakeTeamRepo implements repository.TeamRepository
-type fakeTeamRepo struct {
-	// For RBAC tests
-	roles map[string]domain.Role
-	err   error
+// ---------- transactor ----------
 
-	// For Team service tests
-	created   []*domain.Team
-	createErr error
+type fakeTx struct{ calls int }
 
-	teamsList []*domain.Team
-	listErr   error
-
-	added  []*domain.TeamMember
-	addErr error
-
-	isMember    bool
-	isMemberErr error
-
-	updateCalls []updateCall
-	updateErr   error
-
-	removeCalls []removeCall
-	removeErr   error
+func (f *fakeTx) WithinTx(ctx context.Context, fn func(context.Context) error) error {
+	f.calls++
+	return fn(ctx)
 }
 
-type updateCall struct {
-	teamID  string
-	actorID string
-	userID  string
-	role    domain.Role
+// ---------- store ----------
+
+type store struct {
+	mu       sync.Mutex
+	users    map[string]*domain.User
+	teams    map[string]*domain.Team
+	members  map[string]map[string]domain.Role // team -> user -> role
+	tasks    map[string]*domain.Task
+	history  []*domain.TaskHistory
+	comments []*domain.TaskComment
+
+	failNext error // returned (once) by the next repository call
 }
 
-type removeCall struct {
-	teamID  string
-	actorID string
-	userID  string
-}
-
-func (f *fakeTeamRepo) CreateWithOwner(ctx context.Context, team *domain.Team) error {
-	if f.createErr != nil {
-		return f.createErr
+func newStore() *store {
+	return &store{
+		users:   map[string]*domain.User{},
+		teams:   map[string]*domain.Team{},
+		members: map[string]map[string]domain.Role{},
+		tasks:   map[string]*domain.Task{},
 	}
-	f.created = append(f.created, team)
+}
+
+func (s *store) fail() error {
+	err := s.failNext
+	s.failNext = nil
+	return err
+}
+
+func (s *store) addUser(id string) {
+	s.users[id] = &domain.User{ID: id, Email: id + "@example.com", Name: strings.ToUpper(id[:1]) + id[1:]}
+}
+
+func (s *store) addTeam(teamID, ownerID string) {
+	s.teams[teamID] = &domain.Team{ID: teamID, Name: teamID, CreatedBy: ownerID}
+	s.members[teamID] = map[string]domain.Role{ownerID: domain.RoleOwner}
+}
+
+func (s *store) addMember(teamID, userID string, role domain.Role) {
+	s.members[teamID][userID] = role
+}
+
+func (s *store) addTask(t domain.Task) *domain.Task {
+	cp := t
+	if cp.Version == 0 {
+		cp.Version = 1
+	}
+	if cp.Status == "" {
+		cp.Status = domain.TaskStatusTodo
+	}
+	s.tasks[cp.ID] = &cp
+	return &cp
+}
+
+// ---------- users ----------
+
+type userRepo struct{ s *store }
+
+func (r userRepo) Create(_ context.Context, u *domain.User) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return err
+	}
+	for _, existing := range r.s.users {
+		if existing.Email == u.Email {
+			return domain.ErrAlreadyExists
+		}
+	}
+	cp := *u
+	r.s.users[u.ID] = &cp
 	return nil
 }
 
-func (f *fakeTeamRepo) ListTeamsByUser(ctx context.Context, userID string) ([]*domain.Team, error) {
-	if f.listErr != nil {
-		return nil, f.listErr
+func (r userRepo) GetByEmail(_ context.Context, email string) (*domain.User, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return nil, err
 	}
-	return f.teamsList, nil
-}
-
-func (f *fakeTeamRepo) GetUserRoleInTeam(ctx context.Context, teamID, userID string) (domain.Role, error) {
-	if f.err != nil {
-		return "", f.err
-	}
-	if f.roles == nil {
-		return "", domain.ErrNotFound
-	}
-	role, exists := f.roles[userID]
-	if !exists {
-		return "", domain.ErrNotFound
-	}
-	return role, nil
-}
-
-func (f *fakeTeamRepo) AddMember(ctx context.Context, member *domain.TeamMember) error {
-	if f.addErr != nil {
-		return f.addErr
-	}
-	f.added = append(f.added, member)
-	return nil
-}
-
-func (f *fakeTeamRepo) IsTeamMember(ctx context.Context, teamID, userID string) (bool, error) {
-	if f.isMemberErr != nil {
-		return false, f.isMemberErr
-	}
-	if f.roles != nil {
-		_, exists := f.roles[userID]
-		return exists, nil
-	}
-	return f.isMember, nil
-}
-
-func (f *fakeTeamRepo) ListMembers(ctx context.Context, teamID string) ([]*domain.TeamMemberResponse, error) {
-	return nil, nil
-}
-
-func (f *fakeTeamRepo) UpdateMemberRole(ctx context.Context, teamID, actorID, userID string, role domain.Role) error {
-	if f.updateErr != nil {
-		return f.updateErr
-	}
-	f.updateCalls = append(f.updateCalls, updateCall{teamID, actorID, userID, role})
-	return nil
-}
-
-func (f *fakeTeamRepo) RemoveMember(ctx context.Context, teamID, actorID, userID string) error {
-	if f.removeErr != nil {
-		return f.removeErr
-	}
-	f.removeCalls = append(f.removeCalls, removeCall{teamID, actorID, userID})
-	return nil
-}
-
-func (f *fakeTeamRepo) GetTeamStats(ctx context.Context, teamID string) (*domain.TeamStats, error) {
-	return nil, nil
-}
-
-// ==================== USER FAKES ====================
-
-// fakeUserRepo implements repository.UserRepository
-type fakeUserRepo struct {
-	users map[string]*domain.User
-	err   error
-}
-
-func (f *fakeUserRepo) Create(ctx context.Context, user *domain.User) error {
-	return f.err
-}
-
-func (f *fakeUserRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	for _, u := range f.users {
+	for _, u := range r.s.users {
 		if u.Email == email {
-			return u, nil
+			cp := *u
+			return &cp, nil
 		}
 	}
 	return nil, domain.ErrNotFound
 }
 
-func (f *fakeUserRepo) GetByID(ctx context.Context, userID string) (*domain.User, error) {
-	if f.err != nil {
-		return nil, f.err
+func (r userRepo) GetByID(_ context.Context, id string) (*domain.User, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return nil, err
 	}
-	if u, exists := f.users[userID]; exists {
-		return u, nil
+	if u, ok := r.s.users[id]; ok {
+		cp := *u
+		return &cp, nil
 	}
 	return nil, domain.ErrNotFound
 }
 
-// ==================== RBAC FAKES ====================
+// ---------- teams ----------
 
-// fakeRBAC implements service.RBACService
-type fakeRBAC struct {
-	inviteErr   error
-	changeErr   error
-	removeErr   error
-	inviteCalls int
+type teamRepo struct{ s *store }
 
-	createTaskErr error
-	editTaskErr   error
-	statusErr     error
-	reassignErr   error
-	commentErr    error
-	analyticsErr  error
-}
-
-func (f *fakeRBAC) CanInviteMember(ctx context.Context, teamID, actorID string) error {
-	f.inviteCalls++
-	return f.inviteErr
-}
-
-func (f *fakeRBAC) CanChangeMemberRole(ctx context.Context, teamID, actorID, targetUserID string, newRole domain.Role) error {
-	return f.changeErr
-}
-
-func (f *fakeRBAC) CanRemoveMember(ctx context.Context, teamID, actorID, targetUserID string) error {
-	return f.removeErr
-}
-
-func (f *fakeRBAC) CanViewAnalytics(ctx context.Context, teamID, actorID string) error {
-	return f.analyticsErr
-}
-
-func (f *fakeRBAC) CanCreateTask(ctx context.Context, teamID, actorID string) error {
-	return f.createTaskErr
-}
-
-func (f *fakeRBAC) CanEditTask(ctx context.Context, teamID, actorID, taskCreatorID string) error {
-	return f.editTaskErr
-}
-
-func (f *fakeRBAC) CanChangeTaskStatus(ctx context.Context, teamID, actorID, taskCreatorID string, assigneeID *string) error {
-	return f.statusErr
-}
-
-func (f *fakeRBAC) CanReassignTask(ctx context.Context, teamID, actorID, taskCreatorID string) error {
-	return f.reassignErr
-}
-
-func (f *fakeRBAC) CanCommentOnTask(ctx context.Context, teamID, actorID string) error {
-	return f.commentErr
-}
-
-// ==================== TASK FAKES ====================
-
-// fakeTaskRepo implements repository.TaskRepository
-type fakeTaskRepo struct {
-	created   []*domain.Task
-	createErr error
-
-	task   *domain.Task
-	getErr error
-
-	tasksList []*domain.Task
-	listErr   error
-
-	count    int
-	countErr error
-
-	updatedTask *domain.Task
-	updateErr   error
-	updateCalls []updateTaskCall
-
-	history    []*domain.TaskHistory
-	historyErr error
-
-	comments     []*domain.TaskComment
-	commentErr   error
-	addedComment *domain.TaskComment
-}
-
-type updateTaskCall struct {
-	taskID          string
-	updates         map[string]interface{}
-	changedBy       string
-	expectedVersion int
-}
-
-func (f *fakeTaskRepo) Create(ctx context.Context, task *domain.Task) error {
-	if f.createErr != nil {
-		return f.createErr
+func (r teamRepo) Create(_ context.Context, t *domain.Team) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return err
 	}
-	f.created = append(f.created, task)
+	cp := *t
+	r.s.teams[t.ID] = &cp
+	r.s.members[t.ID] = map[string]domain.Role{}
 	return nil
 }
 
-func (f *fakeTaskRepo) GetByID(ctx context.Context, taskID string) (*domain.Task, error) {
-	if f.getErr != nil {
-		return nil, f.getErr
+func (r teamRepo) ListByUser(_ context.Context, userID string) ([]*domain.Team, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return nil, err
 	}
-	if f.task == nil {
-		return nil, domain.ErrNotFound
+	out := []*domain.Team{}
+	for id, m := range r.s.members {
+		if role, ok := m[userID]; ok {
+			cp := *r.s.teams[id]
+			cp.Role = role
+			out = append(out, &cp)
+		}
 	}
-	return f.task, nil
+	return out, nil
 }
 
-func (f *fakeTaskRepo) ListByTeam(ctx context.Context, filter *domain.TaskListQuery) ([]*domain.Task, error) {
-	if f.listErr != nil {
-		return nil, f.listErr
+func (r teamRepo) AddMember(_ context.Context, m *domain.TeamMember) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return err
 	}
-	return f.tasksList, nil
-}
-
-func (f *fakeTaskRepo) CountByTeam(ctx context.Context, filter *domain.TaskListQuery) (int, error) {
-	if f.countErr != nil {
-		return 0, f.countErr
+	team, ok := r.s.members[m.TeamID]
+	if !ok {
+		return domain.ErrNotFound
 	}
-	return f.count, nil
-}
-
-func (f *fakeTaskRepo) UpdateWithHistory(
-	ctx context.Context,
-	taskID string,
-	updates map[string]interface{},
-	changedBy string,
-	expectedVersion int,
-) (*domain.Task, error) {
-	if f.updateErr != nil {
-		return nil, f.updateErr
+	if _, dup := team[m.UserID]; dup {
+		return domain.ErrAlreadyExists
 	}
-	f.updateCalls = append(f.updateCalls, updateTaskCall{
-		taskID:          taskID,
-		updates:         updates,
-		changedBy:       changedBy,
-		expectedVersion: expectedVersion,
-	})
-	return f.updatedTask, nil
-}
-
-func (f *fakeTaskRepo) GetHistory(ctx context.Context, taskID string) ([]*domain.TaskHistory, error) {
-	if f.historyErr != nil {
-		return nil, f.historyErr
-	}
-	return f.history, nil
-}
-
-func (f *fakeTaskRepo) AddComment(ctx context.Context, comment *domain.TaskComment) error {
-	if f.commentErr != nil {
-		return f.commentErr
-	}
-	f.addedComment = comment
+	team[m.UserID] = m.Role
 	return nil
 }
 
-func (f *fakeTaskRepo) ListComments(ctx context.Context, taskID string) ([]*domain.TaskComment, error) {
-	if f.commentErr != nil {
-		return nil, f.commentErr
+func (r teamRepo) GetMemberRole(_ context.Context, teamID, userID string) (domain.Role, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return "", err
 	}
-	return f.comments, nil
+	if role, ok := r.s.members[teamID][userID]; ok {
+		return role, nil
+	}
+	return "", domain.ErrNotFound
 }
 
-// ==================== CACHE FAKES ====================
+func (r teamRepo) GetMemberRoleForUpdate(ctx context.Context, teamID, userID string) (domain.Role, error) {
+	return r.GetMemberRole(ctx, teamID, userID)
+}
 
-// fakeTaskCache implements cache.TaskCache
+func (r teamRepo) IsMember(_ context.Context, teamID, userID string) (bool, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return false, err
+	}
+	_, ok := r.s.members[teamID][userID]
+	return ok, nil
+}
+
+func (r teamRepo) UpdateMemberRole(_ context.Context, teamID, userID string, role domain.Role) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if _, ok := r.s.members[teamID][userID]; !ok {
+		return domain.ErrNotFound
+	}
+	r.s.members[teamID][userID] = role
+	return nil
+}
+
+func (r teamRepo) RemoveMember(_ context.Context, teamID, userID string) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if _, ok := r.s.members[teamID][userID]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(r.s.members[teamID], userID)
+	return nil
+}
+
+func (r teamRepo) ListMembers(_ context.Context, teamID string) ([]*domain.TeamMemberResponse, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	out := []*domain.TeamMemberResponse{}
+	for uid, role := range r.s.members[teamID] {
+		out = append(out, &domain.TeamMemberResponse{UserID: uid, Role: role})
+	}
+	return out, nil
+}
+
+func (r teamRepo) GetStats(_ context.Context, _ string) (*domain.TeamStats, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return nil, err
+	}
+	return &domain.TeamStats{TasksByStatus: map[domain.TaskStatus]int{}}, nil
+}
+
+// ---------- tasks ----------
+
+type taskRepo struct{ s *store }
+
+func (r taskRepo) Create(_ context.Context, t *domain.Task) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return err
+	}
+	cp := *t
+	r.s.tasks[t.ID] = &cp
+	return nil
+}
+
+func (r taskRepo) GetByID(_ context.Context, id string) (*domain.Task, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return nil, err
+	}
+	if t, ok := r.s.tasks[id]; ok {
+		cp := *t
+		return &cp, nil
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (r taskRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.Task, error) {
+	return r.GetByID(ctx, id)
+}
+
+func (r taskRepo) matching(q *domain.TaskListQuery) []*domain.Task {
+	out := []*domain.Task{}
+	for _, t := range r.s.tasks {
+		if t.TeamID != q.TeamID ||
+			(q.Status != "" && t.Status != q.Status) ||
+			(q.AssigneeID != "" && !t.IsAssignee(q.AssigneeID)) {
+			continue
+		}
+		cp := *t
+		out = append(out, &cp)
+	}
+	slices.SortFunc(out, func(a, b *domain.Task) int { return strings.Compare(b.ID, a.ID) })
+	return out
+}
+
+func (r taskRepo) List(_ context.Context, q *domain.TaskListQuery) ([]*domain.Task, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return nil, err
+	}
+	all := r.matching(q)
+	if q.Offset >= len(all) {
+		return []*domain.Task{}, nil
+	}
+	return all[q.Offset:min(q.Offset+q.Limit, len(all))], nil
+}
+
+func (r taskRepo) Count(_ context.Context, q *domain.TaskListQuery) (int, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	return len(r.matching(q)), nil
+}
+
+func (r taskRepo) Update(_ context.Context, t *domain.Task, expected int) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return err
+	}
+	cur, ok := r.s.tasks[t.ID]
+	if !ok || cur.Version != expected {
+		return domain.ErrVersionConflict
+	}
+	cp := *t
+	cp.Version = expected + 1
+	r.s.tasks[t.ID] = &cp
+	t.Version = cp.Version
+	return nil
+}
+
+func (r taskRepo) UnassignUser(_ context.Context, teamID, userID, changedBy string) (int, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	n := 0
+	for _, t := range r.s.tasks {
+		if t.TeamID == teamID && t.IsAssignee(userID) {
+			raw, _ := json.Marshal(domain.TaskChanges{"assignee_id": {Old: userID, New: nil}})
+			r.s.history = append(r.s.history, &domain.TaskHistory{TaskID: t.ID, ChangedBy: changedBy, Changes: raw})
+			t.AssigneeID = nil
+			t.Version++
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (r taskRepo) AddHistory(_ context.Context, h *domain.TaskHistory) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return err
+	}
+	cp := *h
+	cp.ID = int64(len(r.s.history) + 1)
+	r.s.history = append(r.s.history, &cp)
+	return nil
+}
+
+func (r taskRepo) ListHistory(_ context.Context, taskID string) ([]*domain.TaskHistory, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	out := []*domain.TaskHistory{}
+	for _, h := range r.s.history {
+		if h.TaskID == taskID {
+			out = append(out, h)
+		}
+	}
+	return out, nil
+}
+
+func (r taskRepo) AddComment(_ context.Context, c *domain.TaskComment) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if err := r.s.fail(); err != nil {
+		return err
+	}
+	cp := *c
+	r.s.comments = append(r.s.comments, &cp)
+	return nil
+}
+
+func (r taskRepo) ListComments(_ context.Context, taskID string) ([]*domain.TaskComment, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	out := []*domain.TaskComment{}
+	for _, c := range r.s.comments {
+		if c.TaskID == taskID {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// ---------- task list cache ----------
+
 type fakeTaskCache struct {
-	cached    *domain.TaskListResponse
-	found     bool
-	getErr    error
-	setErr    error
-	invErr    error
-	invCalled int
+	mu          sync.Mutex
+	entries     map[string]*domain.TaskListResponse
+	invalidated []string
+	getErr      error
 }
 
-func (f *fakeTaskCache) GetTasks(ctx context.Context, query *domain.TaskListQuery) (*domain.TaskListResponse, bool, error) {
-	if f.getErr != nil {
-		return nil, false, f.getErr
+func newFakeTaskCache() *fakeTaskCache {
+	return &fakeTaskCache{entries: map[string]*domain.TaskListResponse{}}
+}
+
+func cacheKey(q *domain.TaskListQuery) string {
+	b, _ := json.Marshal(q)
+	return string(b)
+}
+
+func (c *fakeTaskCache) Get(_ context.Context, q *domain.TaskListQuery) (*domain.TaskListResponse, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.getErr != nil {
+		return nil, false, c.getErr
 	}
-	return f.cached, f.found, nil
+	r, ok := c.entries[cacheKey(q)]
+	return r, ok, nil
 }
 
-func (f *fakeTaskCache) SetTasks(ctx context.Context, query *domain.TaskListQuery, response *domain.TaskListResponse) error {
-	return f.setErr
+func (c *fakeTaskCache) Set(_ context.Context, q *domain.TaskListQuery, r *domain.TaskListResponse) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[cacheKey(q)] = r
+	return nil
 }
 
-func (f *fakeTaskCache) InvalidateTeamTasks(ctx context.Context, teamID string) error {
-	f.invCalled++
-	return f.invErr
+func (c *fakeTaskCache) InvalidateTeam(_ context.Context, teamID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.invalidated = append(c.invalidated, teamID)
+	for k := range c.entries {
+		if strings.Contains(k, teamID) {
+			delete(c.entries, k)
+		}
+	}
+	return nil
 }
 
-// ==================== AUTH FAKES ====================
+// ---------- auth ----------
 
-// fakeTokenCache implements cache.TokenCache
 type fakeTokenCache struct {
-	refreshToken string
-	getErr       error
-	setErr       error
-	rotateErr    error
-	deleteErr    error
-	blacklistErr error
+	mu          sync.Mutex
+	refresh     map[string]string
+	blacklisted map[string]time.Duration
 }
 
-func (f *fakeTokenCache) SetRefreshToken(ctx context.Context, hash, userID string) error {
-	return f.setErr
+func newFakeTokenCache() *fakeTokenCache {
+	return &fakeTokenCache{refresh: map[string]string{}, blacklisted: map[string]time.Duration{}}
 }
 
-func (f *fakeTokenCache) GetRefreshToken(ctx context.Context, hash string) (string, error) {
-	if f.getErr != nil {
-		return "", f.getErr
+func (f *fakeTokenCache) SetRefreshToken(_ context.Context, hash, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refresh[hash] = userID
+	return nil
+}
+
+func (f *fakeTokenCache) GetRefreshToken(_ context.Context, hash string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if uid, ok := f.refresh[hash]; ok {
+		return uid, nil
 	}
-	if f.refreshToken == "" {
-		return "", domain.ErrNotFound
+	return "", domain.ErrNotFound
+}
+
+func (f *fakeTokenCache) RotateRefreshToken(_ context.Context, oldHash, newHash, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.refresh[oldHash] != userID {
+		return domain.ErrInvalidCredentials
 	}
-	return f.refreshToken, nil
+	delete(f.refresh, oldHash)
+	f.refresh[newHash] = userID
+	return nil
 }
 
-func (f *fakeTokenCache) RotateRefreshToken(ctx context.Context, oldHash, newHash, userID string) error {
-	return f.rotateErr
+func (f *fakeTokenCache) DeleteRefreshToken(_ context.Context, hash string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.refresh, hash)
+	return nil
 }
 
-func (f *fakeTokenCache) DeleteRefreshToken(ctx context.Context, hash string) error {
-	return f.deleteErr
+func (f *fakeTokenCache) BlacklistAccessToken(_ context.Context, jti string, ttl time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blacklisted[jti] = ttl
+	return nil
 }
 
-func (f *fakeTokenCache) BlacklistAccessToken(ctx context.Context, jti string, ttl time.Duration) error {
-	return f.blacklistErr
+func (f *fakeTokenCache) IsAccessTokenBlacklisted(_ context.Context, jti string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.blacklisted[jti]
+	return ok, nil
 }
 
-func (f *fakeTokenCache) IsAccessTokenBlacklisted(ctx context.Context, jti string) (bool, error) {
-	return false, nil
+// plainHasher "hashes" by prefixing, so tests stay fast and deterministic.
+type plainHasher struct {
+	compares int
+	hashErr  error
 }
 
-// fakeTokenService implements auth.TokenService
-type fakeTokenService struct {
-	accessToken  string
-	refreshToken string
-	claims       *auth.TokenClaims
-	err          error
-}
-
-func (f *fakeTokenService) GenerateAccessToken(userID, email string) (string, error) {
-	if f.err != nil {
-		return "", f.err
+func (h *plainHasher) Hash(p string) (string, error) {
+	if h.hashErr != nil {
+		return "", h.hashErr
 	}
-	if f.accessToken == "" {
-		return "fake-access-token", nil
-	}
-	return f.accessToken, nil
+	return "hashed:" + p, nil
 }
 
-func (f *fakeTokenService) GenerateRefreshToken() (string, error) {
-	if f.err != nil {
-		return "", f.err
+func (h *plainHasher) Compare(hash, p string) error {
+	h.compares++
+	if hash != "hashed:"+p {
+		return errors.New("mismatch")
 	}
-	if f.refreshToken == "" {
-		return "fake-refresh-token", nil
-	}
-	return f.refreshToken, nil
+	return nil
 }
 
-func (f *fakeTokenService) HashRefreshToken(token string) string {
-	return "hashed_" + token
-}
-
-func (f *fakeTokenService) ValidateAccessToken(token string) (*auth.TokenClaims, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	if f.claims == nil {
-		return &auth.TokenClaims{
-			UserID:    "user-1",
-			Email:     "test@example.com",
-			JTI:       "token-id-1",
-			ExpiresAt: time.Now().Add(15 * time.Minute),
-		}, nil
-	}
-	return f.claims, nil
-}
-
-// fakeHasher implements auth.Hasher
-type fakeHasher struct {
-	hash       string
-	hashErr    error
-	compareErr error
-}
-
-func (f *fakeHasher) Hash(password string) (string, error) {
-	if f.hashErr != nil {
-		return "", f.hashErr
-	}
-	if f.hash == "" {
-		return "hashed_" + password, nil
-	}
-	return f.hash, nil
-}
-
-func (f *fakeHasher) Compare(hashedPassword, password string) error {
-	return f.compareErr
-}
+var _ auth.Hasher = (*plainHasher)(nil)

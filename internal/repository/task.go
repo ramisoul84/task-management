@@ -3,9 +3,9 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/pkg/database"
@@ -13,12 +13,26 @@ import (
 
 type TaskRepository interface {
 	Create(ctx context.Context, task *domain.Task) error
-	GetByID(ctx context.Context, taskID string) (*domain.Task, error)
-	ListByTeam(ctx context.Context, filter *domain.TaskListQuery) ([]*domain.Task, error)
-	CountByTeam(ctx context.Context, filter *domain.TaskListQuery) (int, error)
-	UpdateWithHistory(ctx context.Context, taskID string, updates map[string]interface{}, changedBy string, expectedVersion int) (*domain.Task, error)
-	GetHistory(ctx context.Context, taskID string) ([]*domain.TaskHistory, error)
-	AddComment(ctx context.Context, comment *domain.TaskComment) error
+	GetByID(ctx context.Context, id string) (*domain.Task, error)
+	// GetByIDForUpdate locks the row until the surrounding transaction
+	// ends, so concurrent updates are serialised and history is always
+	// computed from the latest committed state.
+	GetByIDForUpdate(ctx context.Context, id string) (*domain.Task, error)
+	List(ctx context.Context, q *domain.TaskListQuery) ([]*domain.Task, error)
+	Count(ctx context.Context, q *domain.TaskListQuery) (int, error)
+	// Update persists the mutable fields of task if its stored version is
+	// still expectedVersion, and bumps the version. Returns
+	// ErrVersionConflict otherwise.
+	Update(ctx context.Context, task *domain.Task, expectedVersion int) error
+	// UnassignUser clears userID as assignee on every task of the team,
+	// recording a history entry for each affected task. Returns the number
+	// of tasks changed.
+	UnassignUser(ctx context.Context, teamID, userID, changedBy string) (int, error)
+
+	AddHistory(ctx context.Context, h *domain.TaskHistory) error
+	ListHistory(ctx context.Context, taskID string) ([]*domain.TaskHistory, error)
+
+	AddComment(ctx context.Context, c *domain.TaskComment) error
 	ListComments(ctx context.Context, taskID string) ([]*domain.TaskComment, error)
 }
 
@@ -30,423 +44,196 @@ func NewTaskRepository(db *database.DB) TaskRepository {
 	return &taskRepo{db: db}
 }
 
-// Create - inserts a new task
-func (r *taskRepo) Create(ctx context.Context, task *domain.Task) error {
-	const op = "taskRepo.Create"
+const taskColumns = `id, team_id, title, description, status, created_by, assignee_id,
+	created_at, updated_at, closed_at, version`
 
-	const insertQuery = `
-		INSERT INTO tasks (
-			id,
-			team_id,
-			title,
-			description,
-			status,
-			created_by,
-			assignee_id,
-			created_at,
-			updated_at,
-			closed_at,
-			version
-		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
+func (r *taskRepo) Create(ctx context.Context, t *domain.Task) error {
+	const q = `
+		INSERT INTO tasks (id, team_id, title, description, status, created_by, assignee_id,
+		                   created_at, updated_at, closed_at, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	result, err := r.db.ExecContext(
-		ctx,
-		insertQuery,
-		task.ID,
-		task.TeamID,
-		task.Title,
-		task.Description,
-		task.Status,
-		task.CreatedBy,
-		task.AssigneeID,
-		task.CreatedAt,
-		task.UpdatedAt,
-		task.ClosedAt,
-		task.Version,
+	_, err := r.db.Q(ctx).ExecContext(ctx, q,
+		t.ID, t.TeamID, t.Title, t.Description, t.Status, t.CreatedBy, t.AssigneeID,
+		t.CreatedAt, t.UpdatedAt, t.ClosedAt, t.Version,
 	)
 	if err != nil {
-		return fmt.Errorf("%s: insert task (id=%s): %w", op, task.ID, err)
+		if database.IsForeignKeyViolation(err) {
+			return domain.ErrNotFound.WithMessage("team or assignee not found")
+		}
+		return fmt.Errorf("taskRepo.Create: %w", err)
 	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("%s: get rows affected (id=%s): %w", op, task.ID, err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("%s: no rows inserted (id=%s): %w", op, task.ID, domain.ErrNotFound)
-	}
-
 	return nil
 }
 
-// GetByID - retrieves a single task by ID
-func (r *taskRepo) GetByID(ctx context.Context, taskID string) (*domain.Task, error) {
-	const op = "taskRepo.GetByID"
-
-	const query = `
-		SELECT
-			id,
-			team_id,
-			title,
-			description,
-			status,
-			created_by,
-			assignee_id,
-			created_at,
-			updated_at,
-			closed_at,
-			version
-		FROM tasks
-		WHERE id = ?
-	`
-
-	var task domain.Task
-	if err := r.db.GetContext(ctx, &task, query, taskID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%s: task not found (id=%s): %w", op, taskID, domain.ErrNotFound)
-		}
-		return nil, fmt.Errorf("%s: get task (id=%s): %w", op, taskID, err)
-	}
-
-	return &task, nil
+func (r *taskRepo) GetByID(ctx context.Context, id string) (*domain.Task, error) {
+	return r.getOne(ctx, `SELECT `+taskColumns+` FROM tasks WHERE id = ?`, id)
 }
 
-// ListByTeam - lists tasks with filters and pagination
-func (r *taskRepo) ListByTeam(ctx context.Context, filter *domain.TaskListQuery) ([]*domain.Task, error) {
-	const op = "taskRepo.ListByTeam"
+func (r *taskRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.Task, error) {
+	return r.getOne(ctx, `SELECT `+taskColumns+` FROM tasks WHERE id = ? FOR UPDATE`, id)
+}
 
-	query := `
-		SELECT
-			id,
-			team_id,
-			title,
-			description,
-			status,
-			created_by,
-			assignee_id,
-			created_at,
-			updated_at,
-			closed_at,
-			version
-		FROM tasks
-		WHERE team_id = ?
-	`
-
-	args := []any{filter.TeamID}
-
-	// Add filters
-	if filter.Status != "" {
-		query += " AND status = ?"
-		args = append(args, filter.Status)
+func (r *taskRepo) getOne(ctx context.Context, q, id string) (*domain.Task, error) {
+	var t domain.Task
+	if err := r.db.Q(ctx).GetContext(ctx, &t, q, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, domain.ErrNotFound.WithMessage("task not found")
+		}
+		return nil, fmt.Errorf("taskRepo.get: %w", err)
 	}
-	if filter.AssigneeID != "" {
-		query += " AND assignee_id = ?"
-		args = append(args, filter.AssigneeID)
+	return &t, nil
+}
+
+// filter builds the shared WHERE clause for List and Count.
+func filter(q *domain.TaskListQuery) (string, []any) {
+	var sb strings.Builder
+	args := []any{q.TeamID}
+	sb.WriteString(" WHERE team_id = ?")
+
+	if q.Status != "" {
+		sb.WriteString(" AND status = ?")
+		args = append(args, q.Status)
+	}
+	if q.AssigneeID != "" {
+		sb.WriteString(" AND assignee_id = ?")
+		args = append(args, q.AssigneeID)
 	}
 
-	// Stable ordering required for pagination; newest first
-	query += " ORDER BY created_at DESC, id DESC"
+	return sb.String(), args
+}
 
-	// Add pagination
-	if filter.Limit > 0 {
-		query += " LIMIT ?"
-		args = append(args, filter.Limit)
+func (r *taskRepo) List(ctx context.Context, q *domain.TaskListQuery) ([]*domain.Task, error) {
+	where, args := filter(q)
+
+	// (created_at, id) is a total order, so pages never overlap or skip
+	// rows even when many tasks share a timestamp.
+	query := `SELECT ` + taskColumns + ` FROM tasks` + where +
+		` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+	args = append(args, q.Limit, q.Offset)
+
+	tasks := make([]*domain.Task, 0, q.Limit)
+	if err := r.db.Q(ctx).SelectContext(ctx, &tasks, query, args...); err != nil {
+		return nil, fmt.Errorf("taskRepo.List: %w", err)
 	}
-	if filter.Offset > 0 {
-		query += " OFFSET ?"
-		args = append(args, filter.Offset)
-	}
-
-	tasks := make([]*domain.Task, 0)
-
-	if err := r.db.SelectContext(ctx, &tasks, query, args...); err != nil {
-		return nil, fmt.Errorf("%s: select tasks: %w", op, err)
-	}
-
 	return tasks, nil
 }
 
-// CountByTeam returns total count of tasks matching filters
-func (r *taskRepo) CountByTeam(ctx context.Context, filter *domain.TaskListQuery) (int, error) {
-	const op = "taskRepo.CountByTeam"
+func (r *taskRepo) Count(ctx context.Context, q *domain.TaskListQuery) (int, error) {
+	where, args := filter(q)
 
-	query := `
-		SELECT COUNT(*)
-		FROM tasks
-		WHERE team_id = ?
-	`
-
-	args := []any{filter.TeamID}
-
-	if filter.Status != "" {
-		query += " AND status = ?"
-		args = append(args, filter.Status)
+	var n int
+	if err := r.db.Q(ctx).GetContext(ctx, &n, `SELECT COUNT(*) FROM tasks`+where, args...); err != nil {
+		return 0, fmt.Errorf("taskRepo.Count: %w", err)
 	}
-	if filter.AssigneeID != "" {
-		query += " AND assignee_id = ?"
-		args = append(args, filter.AssigneeID)
-	}
-
-	var count int
-	if err := r.db.GetContext(ctx, &count, query, args...); err != nil {
-		return 0, fmt.Errorf("%s: count tasks: %w", op, err)
-	}
-
-	return count, nil
+	return n, nil
 }
 
-// UpdateWithHistory - updates task and records history in transaction
-func (r *taskRepo) UpdateWithHistory(
-	ctx context.Context,
-	taskID string,
-	updates map[string]interface{},
-	changedBy string,
-	expectedVersion int,
-) (*domain.Task, error) {
-	const op = "taskRepo.UpdateWithHistory"
+func (r *taskRepo) Update(ctx context.Context, t *domain.Task, expectedVersion int) error {
+	const q = `
+		UPDATE tasks
+		SET title = ?, description = ?, status = ?, assignee_id = ?, closed_at = ?,
+		    updated_at = ?, version = version + 1
+		WHERE id = ? AND version = ?`
 
-	// Start transaction
-	tx, err := r.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("%s: begin transaction: %w", op, err)
-	}
-	defer tx.Rollback()
-
-	// Get current task with row lock
-	var currentTask domain.Task
-	const getQuery = `
-		SELECT
-			id,
-			team_id,
-			title,
-			description,
-			status,
-			created_by,
-			assignee_id,
-			created_at,
-			updated_at,
-			closed_at,
-			version
-		FROM tasks
-		WHERE id = ?
-		FOR UPDATE
-	`
-
-	if err := tx.GetContext(ctx, &currentTask, getQuery, taskID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%s: task not found: %w", op, domain.ErrNotFound)
-		}
-		return nil, fmt.Errorf("%s: get task: %w", op, err)
-	}
-
-	// Check version for optimistic locking
-	if currentTask.Version != expectedVersion {
-		return nil, fmt.Errorf("%s: expected version %d, got %d: %w",
-			op, expectedVersion, currentTask.Version, domain.ErrConflict)
-	}
-
-	// Snapshot old values *before* mutating anything, so history records a
-	// real before/after diff rather than just the new value.
-	changes := make(map[string]domain.FieldChange, len(updates))
-
-	if v, ok := updates["title"]; ok {
-		changes["title"] = domain.FieldChange{Old: currentTask.Title, New: v}
-	}
-	if v, ok := updates["description"]; ok {
-		changes["description"] = domain.FieldChange{Old: currentTask.Description, New: v}
-	}
-	if v, ok := updates["status"]; ok {
-		changes["status"] = domain.FieldChange{Old: currentTask.Status, New: v}
-	}
-	if v, ok := updates["closed_at"]; ok {
-		changes["closed_at"] = domain.FieldChange{Old: currentTask.ClosedAt, New: v}
-	}
-	if v, ok := updates["assignee_id"]; ok {
-		changes["assignee_id"] = domain.FieldChange{Old: currentTask.AssigneeID, New: v}
-	}
-
-	// Build update query dynamically
-	updateQuery := "UPDATE tasks SET version = version + 1, updated_at = NOW()"
-	args := []interface{}{}
-
-	if title, ok := updates["title"]; ok {
-		updateQuery += ", title = ?"
-		args = append(args, title)
-	}
-	if description, ok := updates["description"]; ok {
-		updateQuery += ", description = ?"
-		args = append(args, description)
-	}
-	if status, ok := updates["status"]; ok {
-		updateQuery += ", status = ?"
-		args = append(args, status)
-	}
-	if closedAt, ok := updates["closed_at"]; ok {
-		updateQuery += ", closed_at = ?"
-		args = append(args, closedAt)
-	}
-	if assigneeID, ok := updates["assignee_id"]; ok {
-		updateQuery += ", assignee_id = ?"
-		args = append(args, assigneeID)
-	}
-
-	updateQuery += " WHERE id = ? AND version = ?"
-	args = append(args, taskID, expectedVersion)
-
-	// Execute update
-	result, err := tx.ExecContext(ctx, updateQuery, args...)
-	if err != nil {
-		return nil, fmt.Errorf("%s: update task: %w", op, err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return nil, fmt.Errorf("%s: get rows affected: %w", op, err)
-	}
-	if rowsAffected == 0 {
-		return nil, fmt.Errorf("%s: no rows updated: %w", op, domain.ErrConflict)
-	}
-
-	// Record history with old+new values
-	changesJSON, err := json.Marshal(changes)
-	if err != nil {
-		return nil, fmt.Errorf("%s: marshal changes: %w", op, err)
-	}
-
-	const historyQuery = `
-		INSERT INTO task_history (task_id, changed_by, changes, created_at)
-		VALUES (?, ?, ?, NOW())
-	`
-
-	if _, err := tx.ExecContext(ctx, historyQuery, taskID, changedBy, changesJSON); err != nil {
-		return nil, fmt.Errorf("%s: insert history: %w", op, err)
-	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("%s: commit transaction: %w", op, err)
-	}
-
-	// Get updated task
-	updatedTask, err := r.GetByID(ctx, taskID)
-	if err != nil {
-		return nil, fmt.Errorf("%s: get updated task: %w", op, err)
-	}
-
-	return updatedTask, nil
-}
-
-// historyChanges converts requested column updates into the public history
-// format: {"field":{"old":...,"new":...}}. It is deliberately built from
-// the row locked inside the transaction, so the "old" values always match the
-// state from which the update was applied.
-func historyChanges(task domain.Task, updates map[string]interface{}) map[string]map[string]interface{} {
-	changes := make(map[string]map[string]interface{}, len(updates))
-
-	for field, newValue := range updates {
-		var oldValue interface{}
-		switch field {
-		case "title":
-			oldValue = task.Title
-		case "description":
-			oldValue = task.Description
-		case "status":
-			oldValue = task.Status
-		case "assignee_id":
-			oldValue = task.AssigneeID
-		case "closed_at":
-			oldValue = task.ClosedAt
-		default:
-			// All update keys are controlled by this repository. Keeping this
-			// guard prevents an accidental new key from producing misleading
-			// audit data.
-			continue
-		}
-		changes[field] = map[string]interface{}{"old": oldValue, "new": newValue}
-	}
-
-	return changes
-}
-
-// GetHistory - retrieves task change history
-func (r *taskRepo) GetHistory(ctx context.Context, taskID string) ([]*domain.TaskHistory, error) {
-	const op = "taskRepo.GetHistory"
-
-	const query = `
-		SELECT
-			id,
-			task_id,
-			changed_by,
-			changes,
-			created_at
-		FROM task_history
-		WHERE task_id = ?
-		ORDER BY created_at DESC
-	`
-
-	history := make([]*domain.TaskHistory, 0)
-	if err := r.db.SelectContext(ctx, &history, query, taskID); err != nil {
-		return nil, fmt.Errorf("%s: select history: %w", op, err)
-	}
-
-	return history, nil
-}
-
-// AddComment - adds a comment to a task
-func (r *taskRepo) AddComment(ctx context.Context, comment *domain.TaskComment) error {
-	const op = "taskRepo.AddComment"
-
-	const query = `
-		INSERT INTO task_comments (id, task_id, user_id, content, created_at)
-		VALUES (?, ?, ?, ?, ?)
-	`
-
-	result, err := r.db.ExecContext(
-		ctx,
-		query,
-		comment.ID,
-		comment.TaskID,
-		comment.UserID,
-		comment.Content,
-		comment.CreatedAt,
+	res, err := r.db.Q(ctx).ExecContext(ctx, q,
+		t.Title, t.Description, t.Status, t.AssigneeID, t.ClosedAt, t.UpdatedAt,
+		t.ID, expectedVersion,
 	)
 	if err != nil {
-		return fmt.Errorf("%s: insert comment: %w", op, err)
+		if database.IsForeignKeyViolation(err) {
+			return domain.ErrNotFound.WithMessage("assignee not found")
+		}
+		return fmt.Errorf("taskRepo.Update: %w", err)
+	}
+	if err := requireAffected(res, domain.ErrVersionConflict); err != nil {
+		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("%s: get rows affected: %w", op, err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("%s: no rows inserted: %w", op, domain.ErrNotFound)
-	}
-
+	t.Version = expectedVersion + 1
 	return nil
 }
 
-// ListComments - retrieves all comments for a task
-func (r *taskRepo) ListComments(ctx context.Context, taskID string) ([]*domain.TaskComment, error) {
-	const op = "taskRepo.ListComments"
+func (r *taskRepo) UnassignUser(ctx context.Context, teamID, userID, changedBy string) (int, error) {
+	db := r.db.Q(ctx)
 
-	const query = `
-		SELECT
-			id,
-			task_id,
-			user_id,
-			content,
-			created_at
-		FROM task_comments
-		WHERE task_id = ?
-		ORDER BY created_at ASC
-	`
-
-	comments := make([]*domain.TaskComment, 0)
-	if err := r.db.SelectContext(ctx, &comments, query, taskID); err != nil {
-		return nil, fmt.Errorf("%s: select comments: %w", op, err)
+	// History first: it needs the old assignee. Both statements are
+	// set-based (no per-task round-trips) and run in the caller's tx.
+	const historyQ = `
+		INSERT INTO task_history (task_id, changed_by, changes, created_at)
+		SELECT id, ?, JSON_OBJECT('assignee_id', JSON_OBJECT('old', assignee_id, 'new', NULL)), UTC_TIMESTAMP()
+		FROM tasks
+		WHERE team_id = ? AND assignee_id = ?
+		FOR UPDATE`
+	if _, err := db.ExecContext(ctx, historyQ, changedBy, teamID, userID); err != nil {
+		return 0, fmt.Errorf("taskRepo.UnassignUser: history: %w", err)
 	}
 
+	const updateQ = `
+		UPDATE tasks
+		SET assignee_id = NULL, updated_at = UTC_TIMESTAMP(), version = version + 1
+		WHERE team_id = ? AND assignee_id = ?`
+	res, err := db.ExecContext(ctx, updateQ, teamID, userID)
+	if err != nil {
+		return 0, fmt.Errorf("taskRepo.UnassignUser: update: %w", err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("taskRepo.UnassignUser: rows affected: %w", err)
+	}
+	return int(n), nil
+}
+
+func (r *taskRepo) AddHistory(ctx context.Context, h *domain.TaskHistory) error {
+	const q = `INSERT INTO task_history (task_id, changed_by, changes, created_at) VALUES (?, ?, ?, ?)`
+
+	res, err := r.db.Q(ctx).ExecContext(ctx, q, h.TaskID, h.ChangedBy, h.Changes, h.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("taskRepo.AddHistory: %w", err)
+	}
+	if id, err := res.LastInsertId(); err == nil {
+		h.ID = id
+	}
+	return nil
+}
+
+func (r *taskRepo) ListHistory(ctx context.Context, taskID string) ([]*domain.TaskHistory, error) {
+	const q = `
+		SELECT id, task_id, changed_by, changes, created_at
+		FROM task_history
+		WHERE task_id = ?
+		ORDER BY created_at DESC, id DESC`
+
+	history := make([]*domain.TaskHistory, 0)
+	if err := r.db.Q(ctx).SelectContext(ctx, &history, q, taskID); err != nil {
+		return nil, fmt.Errorf("taskRepo.ListHistory: %w", err)
+	}
+	return history, nil
+}
+
+func (r *taskRepo) AddComment(ctx context.Context, c *domain.TaskComment) error {
+	const q = `INSERT INTO task_comments (id, task_id, user_id, content, created_at) VALUES (?, ?, ?, ?, ?)`
+
+	if _, err := r.db.Q(ctx).ExecContext(ctx, q, c.ID, c.TaskID, c.UserID, c.Content, c.CreatedAt); err != nil {
+		if database.IsForeignKeyViolation(err) {
+			return domain.ErrNotFound.WithMessage("task not found")
+		}
+		return fmt.Errorf("taskRepo.AddComment: %w", err)
+	}
+	return nil
+}
+
+func (r *taskRepo) ListComments(ctx context.Context, taskID string) ([]*domain.TaskComment, error) {
+	const q = `
+		SELECT id, task_id, user_id, content, created_at
+		FROM task_comments
+		WHERE task_id = ?
+		ORDER BY created_at ASC, id ASC`
+
+	comments := make([]*domain.TaskComment, 0)
+	if err := r.db.Q(ctx).SelectContext(ctx, &comments, q, taskID); err != nil {
+		return nil, fmt.Errorf("taskRepo.ListComments: %w", err)
+	}
 	return comments, nil
 }

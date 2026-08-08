@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/pkg/database"
 )
@@ -14,7 +13,7 @@ import (
 type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
-	GetByID(ctx context.Context, userID string) (*domain.User, error)
+	GetByID(ctx context.Context, id string) (*domain.User, error)
 }
 
 type userRepo struct {
@@ -25,84 +24,35 @@ func NewUserRepository(db *database.DB) UserRepository {
 	return &userRepo{db: db}
 }
 
-func (r *userRepo) Create(ctx context.Context, user *domain.User) error {
-	const query = `
-		INSERT INTO users (
-			id,
-			email,
-			password_hash,
-			name
-		)
-		VALUES (?, ?, ?, ?)
-	`
+const userColumns = `id, email, password_hash, name, created_at`
 
-	_, err := r.db.ExecContext(
-		ctx,
-		query,
-		user.ID,
-		user.Email,
-		user.PasswordHash,
-		user.Name,
-	)
-	if err != nil {
-		var mysqlErr *mysql.MySQLError
+func (r *userRepo) Create(ctx context.Context, u *domain.User) error {
+	const q = `INSERT INTO users (id, email, password_hash, name, created_at) VALUES (?, ?, ?, ?, ?)`
 
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-			return domain.ErrAlreadyExists
+	if _, err := r.db.Q(ctx).ExecContext(ctx, q, u.ID, u.Email, u.PasswordHash, u.Name, u.CreatedAt); err != nil {
+		if database.IsDuplicateKey(err) {
+			return domain.ErrAlreadyExists.WithMessage("a user with this email already exists")
 		}
-
-		return fmt.Errorf("create user: %w", err)
+		return fmt.Errorf("userRepo.Create: %w", err)
 	}
-
 	return nil
 }
 
 func (r *userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
-	const query = `
-		SELECT
-			id,
-			email,
-			password_hash,
-			name,
-			created_at
-		FROM users
-		WHERE email = ?
-	`
-
-	var user domain.User
-
-	if err := r.db.GetContext(ctx, &user, query, email); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, domain.ErrNotFound
-		}
-
-		return nil, fmt.Errorf("get user by email: %w", err)
-	}
-
-	return &user, nil
+	return r.getOne(ctx, `SELECT `+userColumns+` FROM users WHERE email = ?`, email)
 }
 
 func (r *userRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
-	const query = `
-		SELECT
-			id,
-			email,
-			password_hash,
-			name,
-			created_at
-		FROM users
-		WHERE id = ?
-	`
+	return r.getOne(ctx, `SELECT `+userColumns+` FROM users WHERE id = ?`, id)
+}
 
-	var user domain.User
-
-	if err := r.db.GetContext(ctx, &user, query, id); err != nil {
+func (r *userRepo) getOne(ctx context.Context, q string, arg any) (*domain.User, error) {
+	var u domain.User
+	if err := r.db.Q(ctx).GetContext(ctx, &u, q, arg); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, domain.ErrNotFound
+			return nil, domain.ErrNotFound.WithMessage("user not found")
 		}
-
-		return nil, fmt.Errorf("get user by id: %w", err)
+		return nil, fmt.Errorf("userRepo.get: %w", err)
 	}
-
-	return &user, nil
+	return &u, nil
 }

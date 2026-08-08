@@ -1,120 +1,142 @@
+// Package app wires dependencies together and owns the process lifecycle.
 package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/rs/zerolog"
 
 	"github.com/ramisoul84/task-management/internal/cache"
 	"github.com/ramisoul84/task-management/internal/config"
 	"github.com/ramisoul84/task-management/internal/repository"
-	fiberServer "github.com/ramisoul84/task-management/internal/server/http"
+	httpserver "github.com/ramisoul84/task-management/internal/server/http"
 	"github.com/ramisoul84/task-management/internal/server/http/handler"
 	"github.com/ramisoul84/task-management/internal/service"
-	authUtil "github.com/ramisoul84/task-management/pkg/auth"
-	cacheRedis "github.com/ramisoul84/task-management/pkg/cache"
+	"github.com/ramisoul84/task-management/pkg/auth"
 	"github.com/ramisoul84/task-management/pkg/database"
 	"github.com/ramisoul84/task-management/pkg/logger"
+	"github.com/ramisoul84/task-management/pkg/redisx"
 	"github.com/ramisoul84/task-management/pkg/validator"
 )
 
 type App struct {
-	cfg        *config.Config
-	log        *logger.Logger
-	db         *database.DB
-	redisCache *cacheRedis.Cache
-	server     *fiberServer.Server
+	cfg    *config.Config
+	log    zerolog.Logger
+	db     *database.DB
+	redis  *redisx.Client
+	server *httpserver.Server
 }
 
-func New(cfg *config.Config) (*App, error) {
-	log := logger.New(cfg.Logger.Level, cfg.App.Name, cfg.IsDevelopment(), cfg.Logger.Output)
+// New connects to infrastructure and builds the HTTP server.
+func New(ctx context.Context, cfg *config.Config) (*App, error) {
+	log := logger.New(cfg.Log)
 	log.Info().Str("env", cfg.App.Env).Msg("starting application")
 
-	// Database
-	db, err := database.NewMySQL(cfg.DB)
-	if err != nil {
-		return nil, fmt.Errorf("database: %w", err)
+	if cfg.WeakSecret() {
+		log.Warn().Msg("SECRET is shorter than 32 bytes; this is rejected in production")
 	}
-	log.Info().Msg("database connected")
 
-	// Redis
-	redisCache, err := cacheRedis.New(cfg.Cache)
+	db, err := database.Open(ctx, cfg.DB)
 	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("redis: %w", err)
+		return nil, err
 	}
-	log.Info().Msg("redis connected")
+	log.Info().Str("host", cfg.DB.Host).Msg("mysql connected")
 
-	// utlities
-	hasher := authUtil.NewHasher(cfg.Security.Cost)
-	token := authUtil.NewTokenService(cfg.Security)
-	requestValidator := validator.New()
+	rdb, err := redisx.Open(ctx, cfg.Redis)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	log.Info().Str("addr", cfg.Redis.Addr).Msg("redis connected")
 
-	// repositories
+	// Utilities
+	hasher := auth.NewHasher(cfg.Auth.BcryptCost)
+	tokens := auth.NewTokenService(cfg.Auth.Secret, cfg.Auth.Issuer, cfg.Auth.AccessTokenTTL)
+	v := validator.New()
+
+	// Repositories
 	userRepo := repository.NewUserRepository(db)
 	teamRepo := repository.NewTeamRepository(db)
 	taskRepo := repository.NewTaskRepository(db)
 
 	// Caches
-	tokenCache := cache.NewTokenCache(redisCache, cfg.Security.RefreshTokenTTL)
-	taskCache := cache.NewTaskCache(redisCache, cfg.CacheTTL.TaskListTTL)
+	tokenCache := cache.NewTokenCache(rdb, cfg.Auth.RefreshTokenTTL)
+	taskCache := cache.NewTaskCache(rdb, cfg.Cache.TaskListTTL)
 
-	// services
-	authSvc := service.NewAuthService(userRepo, tokenCache, token, hasher, log, cfg.Security.AccessTokenTTL)
-	rbacService := service.NewRBACService(teamRepo)
-	teamSvc := service.NewTeamService(teamRepo, userRepo, rbacService, log)
-	taskSvc := service.NewTaskService(taskRepo, taskCache, teamRepo, rbacService, log)
+	// Services
+	authSvc := service.NewAuthService(userRepo, tokenCache, tokens, hasher, cfg.Auth.AccessTokenTTL)
+	teamSvc := service.NewTeamService(db, teamRepo, userRepo, taskRepo, taskCache)
+	taskSvc := service.NewTaskService(db, taskRepo, teamRepo, taskCache)
 
-	// handlers
-	authHandler := handler.NewAuthHandler(authSvc, requestValidator, cfg.Security)
-	teamHandler := handler.NewTeamHandler(teamSvc, requestValidator)
-	taskHandler := handler.NewTaskHandler(taskSvc, requestValidator)
+	// Handlers
+	handlers := httpserver.Handlers{
+		Auth: handler.NewAuthHandler(authSvc, v, cfg.Auth),
+		Team: handler.NewTeamHandler(teamSvc, v),
+		Task: handler.NewTaskHandler(taskSvc, v),
+	}
 
-	// Server
-	server := fiberServer.NewServer(cfg, token, tokenCache, redisCache.Client, log, authHandler, teamHandler, taskHandler)
+	server := httpserver.New(httpserver.Deps{
+		Config:     cfg,
+		Log:        log,
+		Tokens:     tokens,
+		TokenCache: tokenCache,
+		Redis:      rdb.Client,
+		Handlers:   handlers,
+		Checks: map[string]httpserver.HealthCheck{
+			"mysql": db.Health,
+			"redis": rdb.Health,
+		},
+	})
 
-	return &App{
-		cfg:        cfg,
-		log:        log,
-		db:         db,
-		redisCache: redisCache,
-		server:     server,
-	}, nil
+	return &App{cfg: cfg, log: log, db: db, redis: rdb, server: server}, nil
 }
 
-func (a *App) Start() <-chan error {
-	errChan := make(chan error, 1)
-
+// Run serves HTTP until ctx is cancelled or the server fails, then shuts
+// everything down gracefully.
+func (a *App) Run(ctx context.Context) error {
+	serverErr := make(chan error, 1)
 	go func() {
-		a.log.Info().Int("port", a.cfg.Server.Port).Msg("server starting")
-		if err := a.server.Run(); err != nil {
-			errChan <- err
-		}
-		close(errChan)
+		a.log.Info().Int("port", a.cfg.HTTP.Port).Msg("http server listening")
+		serverErr <- a.server.Listen()
 	}()
 
-	return errChan
+	var runErr error
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			runErr = fmt.Errorf("http server: %w", err)
+		}
+	case <-ctx.Done():
+		a.log.Info().Msg("shutdown signal received")
+	}
+
+	return errors.Join(runErr, a.shutdown())
 }
 
-func (a *App) Shutdown() error {
-	a.log.Info().Msg("shutting down...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
+func (a *App) shutdown() error {
+	ctx, cancel := context.WithTimeout(context.Background(), a.cfg.HTTP.ShutdownTimeout)
 	defer cancel()
 
+	var errs []error
+
+	// Stop accepting requests first and drain in-flight ones, then close
+	// the backends they depend on.
 	if err := a.server.Shutdown(ctx); err != nil {
-		a.log.Error().Err(err).Msg("server shutdown error")
+		errs = append(errs, fmt.Errorf("http shutdown: %w", err))
 	}
-	a.log.Info().Msg("server stopped")
-
 	if err := a.db.Close(); err != nil {
-		a.log.Error().Err(err).Msg("database close error")
+		errs = append(errs, fmt.Errorf("mysql close: %w", err))
 	}
-	a.log.Info().Msg("database closed")
+	if err := a.redis.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("redis close: %w", err))
+	}
 
-	if err := a.redisCache.Close(); err != nil {
-		a.log.Error().Err(err).Msg("cache close error")
+	if len(errs) > 0 {
+		a.log.Error().Errs("errors", errs).Msg("shutdown finished with errors")
+		return errors.Join(errs...)
 	}
-	a.log.Info().Msg("cache closed")
 
 	a.log.Info().Msg("shutdown complete")
 	return nil

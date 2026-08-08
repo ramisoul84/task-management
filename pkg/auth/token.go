@@ -10,8 +10,6 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-
-	"github.com/ramisoul84/task-management/internal/config"
 )
 
 type TokenService interface {
@@ -41,11 +39,11 @@ type accessClaims struct {
 	jwt.RegisteredClaims
 }
 
-func NewTokenService(cfg config.SecurityConfig) TokenService {
+func NewTokenService(secret, issuer string, accessTokenTTL time.Duration) TokenService {
 	return &tokenService{
-		secret:         []byte(cfg.Secret),
-		issuer:         cfg.Issuer,
-		accessTokenTTL: cfg.AccessTokenTTL,
+		secret:         []byte(secret),
+		issuer:         issuer,
+		accessTokenTTL: accessTokenTTL,
 	}
 }
 

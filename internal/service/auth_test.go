@@ -6,213 +6,129 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
-
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/internal/service"
 	"github.com/ramisoul84/task-management/pkg/auth"
-	"github.com/ramisoul84/task-management/pkg/logger"
 )
 
-func newAuthService(
-	t *testing.T,
-	userRepo *fakeUserRepo,
-	tokenCache *fakeTokenCache,
-	tokenSvc *fakeTokenService,
-	hasher *fakeHasher,
-) service.AuthService {
+type authFixture struct {
+	s        *store
+	sessions *fakeTokenCache
+	hasher   *plainHasher
+	tokens   auth.TokenService
+	svc      service.AuthService
+}
+
+func newAuthFixture(t *testing.T) *authFixture {
 	t.Helper()
-
-	l := logger.New("debug", "test", false, "stdout")
-	l.Logger = l.Logger.Level(zerolog.Disabled)
-
-	return service.NewAuthService(userRepo, tokenCache, tokenSvc, hasher, l, 15*time.Minute)
+	f := &authFixture{
+		s:        newStore(),
+		sessions: newFakeTokenCache(),
+		hasher:   &plainHasher{},
+		tokens:   auth.NewTokenService("test-secret-test-secret-test-secret", "test", 15*time.Minute),
+	}
+	f.svc = service.NewAuthService(userRepo{f.s}, f.sessions, f.tokens, f.hasher, 15*time.Minute)
+	return f
 }
 
-func TestAuthService_Register(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("success", func(t *testing.T) {
-		userRepo := &fakeUserRepo{}
-		hasher := &fakeHasher{hash: "hashed_password"}
-		svc := newAuthService(t, userRepo, &fakeTokenCache{}, &fakeTokenService{}, hasher)
-
-		user, err := svc.Register(ctx, "  TEST@Example.com ", "StrongPass123!", "  john doe  ")
-
-		if err != nil {
-			t.Fatalf("Register() error = %v", err)
-		}
-		if user == nil {
-			t.Fatal("Register() = nil")
-		}
-		if user.Email != "test@example.com" {
-			t.Errorf("Email = %q, want test@example.com", user.Email)
-		}
-		if user.Name != "John doe" {
-			t.Errorf("Name = %q, want 'John doe'", user.Name)
-		}
-		if user.ID == "" {
-			t.Error("ID is empty")
-		}
-		if user.PasswordHash != "hashed_password" {
-			t.Errorf("PasswordHash = %q", user.PasswordHash)
-		}
+func (f *authFixture) register(t *testing.T) *domain.User {
+	t.Helper()
+	u, err := f.svc.Register(context.Background(), &domain.RegisterRequest{
+		Email: "  Rami@Example.COM ", Password: "s3cret-pass", Name: "  Rami Suliman ",
 	})
-
-	t.Run("hash_error", func(t *testing.T) {
-		hasher := &fakeHasher{hashErr: errRepoFailure}
-		svc := newAuthService(t, &fakeUserRepo{}, &fakeTokenCache{}, &fakeTokenService{}, hasher)
-
-		_, err := svc.Register(ctx, "test@example.com", "password", "John")
-		if !errors.Is(err, errRepoFailure) {
-			t.Fatalf("error = %v, want %v", err, errRepoFailure)
-		}
-	})
-
-	t.Run("duplicate_email", func(t *testing.T) {
-		userRepo := &fakeUserRepo{err: domain.ErrAlreadyExists}
-		hasher := &fakeHasher{hash: "hash"}
-		svc := newAuthService(t, userRepo, &fakeTokenCache{}, &fakeTokenService{}, hasher)
-
-		_, err := svc.Register(ctx, "test@example.com", "password", "John")
-		if !errors.Is(err, domain.ErrAlreadyExists) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrAlreadyExists)
-		}
-	})
+	wantErr(t, err, nil)
+	return u
 }
 
-func TestAuthService_Login(t *testing.T) {
-	ctx := context.Background()
+func TestRegister(t *testing.T) {
+	f := newAuthFixture(t)
+	u := f.register(t)
 
-	user := &domain.User{
-		ID:           "user-1",
-		Email:        "test@example.com",
-		PasswordHash: "hashed_password",
-		Name:         "John Doe",
+	if u.Email != "rami@example.com" {
+		t.Fatalf("email = %q, want normalised", u.Email)
+	}
+	if u.Name != "Rami Suliman" {
+		t.Fatalf("name = %q; names must not be re-cased", u.Name)
+	}
+	if u.PasswordHash != "hashed:s3cret-pass" || u.CreatedAt.IsZero() {
+		t.Fatalf("unexpected user: %+v", u)
 	}
 
-	t.Run("success", func(t *testing.T) {
-		userRepo := &fakeUserRepo{users: map[string]*domain.User{"user-1": user}}
-		tokenCache := &fakeTokenCache{}
-		tokenSvc := &fakeTokenService{
-			accessToken:  "access-token-123",
-			refreshToken: "refresh-token-456",
-		}
-		hasher := &fakeHasher{}
-		svc := newAuthService(t, userRepo, tokenCache, tokenSvc, hasher)
+	_, err := f.svc.Register(context.Background(), &domain.RegisterRequest{Email: "rami@example.com", Password: "x", Name: "x"})
+	wantErr(t, err, domain.ErrAlreadyExists)
+}
 
-		result, err := svc.Login(ctx, "TEST@example.com", "password")
+func TestLogin(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthFixture(t)
+	f.register(t)
 
-		if err != nil {
-			t.Fatalf("Login() error = %v", err)
+	t.Run("success issues tokens and stores refresh session", func(t *testing.T) {
+		res, err := f.svc.Login(ctx, &domain.LoginRequest{Email: "RAMI@example.com", Password: "s3cret-pass"})
+		wantErr(t, err, nil)
+		if res.Token.AccessToken == "" || res.Token.RefreshToken == "" || res.Token.ExpiresIn != 900 {
+			t.Fatalf("unexpected tokens: %+v", res.Token)
 		}
-		if result == nil {
-			t.Fatal("Login() = nil")
-		}
-		if result.User.ID != "user-1" {
-			t.Errorf("User.ID = %q", result.User.ID)
-		}
-		if result.Token.AccessToken != "access-token-123" {
-			t.Errorf("AccessToken = %q", result.Token.AccessToken)
-		}
-		if result.Token.RefreshToken != "refresh-token-456" {
-			t.Errorf("RefreshToken = %q", result.Token.RefreshToken)
+		if _, err := f.sessions.GetRefreshToken(ctx, f.tokens.HashRefreshToken(res.Token.RefreshToken)); err != nil {
+			t.Fatal("refresh token must be stored (hashed)")
 		}
 	})
 
-	t.Run("user_not_found", func(t *testing.T) {
-		userRepo := &fakeUserRepo{users: map[string]*domain.User{}}
-		svc := newAuthService(t, userRepo, &fakeTokenCache{}, &fakeTokenService{}, &fakeHasher{})
-
-		_, err := svc.Login(ctx, "ghost@example.com", "password")
-		if !errors.Is(err, domain.ErrInvalidCredentials) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrInvalidCredentials)
-		}
+	t.Run("wrong password", func(t *testing.T) {
+		_, err := f.svc.Login(ctx, &domain.LoginRequest{Email: "rami@example.com", Password: "nope"})
+		wantErr(t, err, domain.ErrInvalidCredentials)
 	})
 
-	t.Run("wrong_password", func(t *testing.T) {
-		userRepo := &fakeUserRepo{users: map[string]*domain.User{"user-1": user}}
-		hasher := &fakeHasher{compareErr: errors.New("wrong password")}
-		svc := newAuthService(t, userRepo, &fakeTokenCache{}, &fakeTokenService{}, hasher)
-
-		_, err := svc.Login(ctx, "test@example.com", "wrong")
-		if !errors.Is(err, domain.ErrInvalidCredentials) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrInvalidCredentials)
+	t.Run("unknown email still performs a hash comparison", func(t *testing.T) {
+		before := f.hasher.compares
+		_, err := f.svc.Login(ctx, &domain.LoginRequest{Email: "ghost@example.com", Password: "whatever"})
+		wantErr(t, err, domain.ErrInvalidCredentials)
+		if f.hasher.compares != before+1 {
+			t.Fatal("missing-user path must cost a bcrypt comparison (timing side channel)")
 		}
 	})
 }
 
-func TestAuthService_Refresh(t *testing.T) {
+func TestRefresh_RotatesAndRejectsReuse(t *testing.T) {
 	ctx := context.Background()
+	f := newAuthFixture(t)
+	f.register(t)
 
-	user := &domain.User{ID: "user-1", Email: "test@example.com"}
+	login, err := f.svc.Login(ctx, &domain.LoginRequest{Email: "rami@example.com", Password: "s3cret-pass"})
+	wantErr(t, err, nil)
 
-	t.Run("success", func(t *testing.T) {
-		userRepo := &fakeUserRepo{users: map[string]*domain.User{"user-1": user}}
-		tokenCache := &fakeTokenCache{refreshToken: "user-1"}
-		tokenSvc := &fakeTokenService{
-			accessToken:  "new-access-token",
-			refreshToken: "new-refresh-token",
-		}
-		svc := newAuthService(t, userRepo, tokenCache, tokenSvc, &fakeHasher{})
+	pair, err := f.svc.Refresh(ctx, login.Token.RefreshToken)
+	wantErr(t, err, nil)
+	if pair.RefreshToken == login.Token.RefreshToken {
+		t.Fatal("refresh token must rotate")
+	}
 
-		result, err := svc.Refresh(ctx, "valid-refresh-token")
+	_, err = f.svc.Refresh(ctx, login.Token.RefreshToken)
+	wantErr(t, err, domain.ErrInvalidCredentials)
 
-		if err != nil {
-			t.Fatalf("Refresh() error = %v", err)
-		}
-		if result.AccessToken != "new-access-token" {
-			t.Errorf("AccessToken = %q", result.AccessToken)
-		}
-		if result.RefreshToken != "new-refresh-token" {
-			t.Errorf("RefreshToken = %q", result.RefreshToken)
-		}
-	})
-
-	t.Run("empty_token", func(t *testing.T) {
-		svc := newAuthService(t, &fakeUserRepo{}, &fakeTokenCache{}, &fakeTokenService{}, &fakeHasher{})
-		_, err := svc.Refresh(ctx, "")
-		if !errors.Is(err, domain.ErrInvalidCredentials) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrInvalidCredentials)
-		}
-	})
-
-	t.Run("token_not_found", func(t *testing.T) {
-		tokenCache := &fakeTokenCache{getErr: domain.ErrNotFound}
-		svc := newAuthService(t, &fakeUserRepo{}, tokenCache, &fakeTokenService{}, &fakeHasher{})
-
-		_, err := svc.Refresh(ctx, "invalid-token")
-		if !errors.Is(err, domain.ErrInvalidCredentials) {
-			t.Fatalf("error = %v, want %v", err, domain.ErrInvalidCredentials)
-		}
-	})
+	_, err = f.svc.Refresh(ctx, "")
+	wantErr(t, err, domain.ErrInvalidCredentials)
 }
 
-func TestAuthService_Logout(t *testing.T) {
+func TestLogout_RevokesBothTokens(t *testing.T) {
 	ctx := context.Background()
+	f := newAuthFixture(t)
+	f.register(t)
 
-	t.Run("success", func(t *testing.T) {
-		tokenCache := &fakeTokenCache{}
-		tokenSvc := &fakeTokenService{
-			claims: &auth.TokenClaims{
-				JTI:       "token-id-1",
-				ExpiresAt: time.Now().Add(15 * time.Minute),
-			},
-		}
-		svc := newAuthService(t, &fakeUserRepo{}, tokenCache, tokenSvc, &fakeHasher{})
+	login, err := f.svc.Login(ctx, &domain.LoginRequest{Email: "rami@example.com", Password: "s3cret-pass"})
+	wantErr(t, err, nil)
 
-		err := svc.Logout(ctx, "access-token", "refresh-token")
-		if err != nil {
-			t.Fatalf("Logout() error = %v", err)
-		}
-	})
+	wantErr(t, f.svc.Logout(ctx, login.Token.AccessToken, login.Token.RefreshToken), nil)
 
-	t.Run("empty_refresh_token_returns_nil", func(t *testing.T) {
-		svc := newAuthService(t, &fakeUserRepo{}, &fakeTokenCache{}, &fakeTokenService{}, &fakeHasher{})
+	claims, err := f.tokens.ValidateAccessToken(login.Token.AccessToken)
+	wantErr(t, err, nil)
+	if banned, _ := f.sessions.IsAccessTokenBlacklisted(ctx, claims.JTI); !banned {
+		t.Fatal("access token must be blacklisted")
+	}
+	if _, err := f.svc.Refresh(ctx, login.Token.RefreshToken); !errors.Is(err, domain.ErrInvalidCredentials) {
+		t.Fatal("refresh token must be revoked")
+	}
 
-		err := svc.Logout(ctx, "", "")
-		if err != nil {
-			t.Fatalf("Logout() error = %v, want nil", err)
-		}
-	})
+	// Idempotent with nothing to revoke.
+	wantErr(t, f.svc.Logout(ctx, "", ""), nil)
 }

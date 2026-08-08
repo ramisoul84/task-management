@@ -43,7 +43,7 @@ func setupTestDB(t *testing.T) *database.DB {
 		t.Fatalf("connect test db: %v", err)
 	}
 
-	db := &database.DB{DB: sqlxDB}
+	db := database.Wrap(sqlxDB)
 	t.Cleanup(func() { _ = db.Close() })
 
 	return db
@@ -99,7 +99,7 @@ func TestGetTeamStats_Integration(t *testing.T) {
 	})
 
 	// ---- act ----
-	stats, err := teamRepo.GetTeamStats(ctx, teamID)
+	stats, err := teamRepo.GetStats(ctx, teamID)
 	if err != nil {
 		t.Fatalf("GetTeamStats() error = %v", err)
 	}

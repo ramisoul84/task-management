@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ramisoul84/task-management/internal/domain"
-	"github.com/ramisoul84/task-management/pkg/cache"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/ramisoul84/task-management/internal/domain"
+	"github.com/ramisoul84/task-management/pkg/redisx"
 )
 
 type TokenCache interface {
@@ -21,11 +22,11 @@ type TokenCache interface {
 }
 
 type tokenCache struct {
-	cache      *cache.Cache
+	cache      *redisx.Client
 	refreshTTL time.Duration
 }
 
-func NewTokenCache(cache *cache.Cache, refreshTTL time.Duration) TokenCache {
+func NewTokenCache(cache *redisx.Client, refreshTTL time.Duration) TokenCache {
 	return &tokenCache{
 		cache:      cache,
 		refreshTTL: refreshTTL,
@@ -35,7 +36,7 @@ func NewTokenCache(cache *cache.Cache, refreshTTL time.Duration) TokenCache {
 func (r *tokenCache) SetRefreshToken(ctx context.Context, hash, userID string) error {
 	key := refreshTokenKey(hash)
 
-	if err := r.cache.Client.Set(ctx, key, userID, r.refreshTTL).Err(); err != nil {
+	if err := r.cache.Set(ctx, key, userID, r.refreshTTL).Err(); err != nil {
 		return fmt.Errorf("save refresh token: %w", err)
 	}
 
@@ -45,7 +46,7 @@ func (r *tokenCache) SetRefreshToken(ctx context.Context, hash, userID string) e
 func (r *tokenCache) GetRefreshToken(ctx context.Context, hash string) (string, error) {
 	key := refreshTokenKey(hash)
 
-	userID, err := r.cache.Client.Get(ctx, key).Result()
+	userID, err := r.cache.Get(ctx, key).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return "", domain.ErrNotFound
@@ -64,7 +65,7 @@ func (r *tokenCache) RotateRefreshToken(ctx context.Context, oldHash string, new
 	// Atomically fetch-and-delete the old token. If it no longer exists (or
 	// belongs to a different user than expected), it was already consumed by
 	// a previous rotation — this is a replay/reuse attempt on a stale token.
-	oldVal, err := r.cache.Client.GetDel(ctx, oldKey).Result()
+	oldVal, err := r.cache.GetDel(ctx, oldKey).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return domain.ErrInvalidCredentials
@@ -76,7 +77,7 @@ func (r *tokenCache) RotateRefreshToken(ctx context.Context, oldHash string, new
 		return domain.ErrInvalidCredentials
 	}
 
-	if err := r.cache.Client.Set(ctx, newKey, userID, r.refreshTTL).Err(); err != nil {
+	if err := r.cache.Set(ctx, newKey, userID, r.refreshTTL).Err(); err != nil {
 		return fmt.Errorf("rotate refresh token: set new token: %w", err)
 	}
 
@@ -86,7 +87,7 @@ func (r *tokenCache) RotateRefreshToken(ctx context.Context, oldHash string, new
 func (r *tokenCache) DeleteRefreshToken(ctx context.Context, hash string) error {
 	key := refreshTokenKey(hash)
 
-	if err := r.cache.Client.Del(ctx, key).Err(); err != nil {
+	if err := r.cache.Del(ctx, key).Err(); err != nil {
 		return fmt.Errorf("delete refresh token: %w", err)
 	}
 
@@ -99,7 +100,7 @@ func (r *tokenCache) BlacklistAccessToken(ctx context.Context, jti string, ttl t
 	}
 
 	key := accessTokenKey(jti)
-	if err := r.cache.Client.Set(ctx, key, "1", ttl).Err(); err != nil {
+	if err := r.cache.Set(ctx, key, "1", ttl).Err(); err != nil {
 		return fmt.Errorf("cache: blacklist %s: %w", jti, err)
 	}
 
@@ -107,7 +108,7 @@ func (r *tokenCache) BlacklistAccessToken(ctx context.Context, jti string, ttl t
 }
 
 func (r *tokenCache) IsAccessTokenBlacklisted(ctx context.Context, jti string) (bool, error) {
-	n, err := r.cache.Client.Exists(ctx, "auth:bl:"+jti).Result()
+	n, err := r.cache.Exists(ctx, accessTokenKey(jti)).Result()
 	if err != nil {
 		return false, fmt.Errorf("cache: check blacklist %s: %w", jti, err)
 	}
