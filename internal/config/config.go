@@ -206,7 +206,8 @@ func (c *Config) validate(e *env) {
 		"COOKIE_SAME_SITE must be Strict, Lax or None")
 	e.check(c.Auth.CookieSameSite != "None" || c.Auth.CookieSecure,
 		"COOKIE_SAME_SITE=None requires COOKIE_SECURE=true")
-	e.check(c.Cache.TaskListTTL > 0, "CACHE_TASK_LIST_TTL must be positive")
+	e.check(c.Cache.TaskListTTL > 0 && c.Cache.TaskListTTL <= time.Hour,
+		"CACHE_TASK_LIST_TTL must be between 0 and 1h")
 	e.check(c.RateLimit.GlobalMax > 0 && c.RateLimit.AuthMax > 0, "rate limits must be positive")
 
 	// Browsers reject credentialed CORS responses with a wildcard origin.

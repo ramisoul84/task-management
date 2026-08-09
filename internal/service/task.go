@@ -101,9 +101,12 @@ func (s *taskService) ListTasks(ctx context.Context, userID string, q *domain.Ta
 
 	normalizePage(q)
 
-	if cached, ok, err := s.cache.Get(ctx, q); err != nil {
+	// A cache failure is not a request failure: fall through to MySQL.
+	cached, stamp, err := s.cache.Get(ctx, q)
+	if err != nil {
 		logger.FromContext(ctx).Warn().Err(err).Msg("task cache read failed")
-	} else if ok {
+	}
+	if cached != nil {
 		return cached, nil
 	}
 
@@ -124,7 +127,7 @@ func (s *taskService) ListTasks(ctx context.Context, userID string, q *domain.Ta
 		HasMore: q.Offset+len(tasks) < total,
 	}
 
-	if err := s.cache.Set(ctx, q, resp); err != nil {
+	if err := s.cache.Set(ctx, q, stamp, resp); err != nil {
 		logger.FromContext(ctx).Warn().Err(err).Msg("task cache write failed")
 	}
 
