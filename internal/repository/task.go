@@ -186,9 +186,9 @@ func (r *taskRepo) UnassignUser(ctx context.Context, teamID, userID, changedBy s
 }
 
 func (r *taskRepo) AddHistory(ctx context.Context, h *domain.TaskHistory) error {
-	const q = `INSERT INTO task_history (task_id, changed_by, changes, created_at) VALUES (?, ?, ?, ?)`
+	const q = `INSERT INTO task_history (task_id, changed_by, action, changes, created_at) VALUES (?, ?, ?, ?, ?)`
 
-	res, err := r.db.Q(ctx).ExecContext(ctx, q, h.TaskID, h.ChangedBy, h.Changes, h.CreatedAt)
+	res, err := r.db.Q(ctx).ExecContext(ctx, q, h.TaskID, h.ChangedBy, h.Action, h.Changes, h.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("taskRepo.AddHistory: %w", err)
 	}
@@ -200,7 +200,7 @@ func (r *taskRepo) AddHistory(ctx context.Context, h *domain.TaskHistory) error 
 
 func (r *taskRepo) ListHistory(ctx context.Context, taskID string) ([]*domain.TaskHistory, error) {
 	const q = `
-		SELECT id, task_id, changed_by, changes, created_at
+		SELECT id, task_id, changed_by, action, changes, created_at
 		FROM task_history
 		WHERE task_id = ?
 		ORDER BY created_at DESC, id DESC`

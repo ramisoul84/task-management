@@ -107,11 +107,21 @@ type FieldChange struct {
 // {"status": {"old": "todo", "new": "done"}}.
 type TaskChanges map[string]FieldChange
 
-// TaskHistory is one audit-log entry: who changed what, and when.
+// HistoryAction says what kind of event a history entry records.
+type HistoryAction string
+
+const (
+	HistoryCreated HistoryAction = "created"
+	HistoryUpdated HistoryAction = "updated"
+)
+
+// TaskHistory is one audit-log entry: who changed what, and when. For
+// "created" entries every initial field is recorded with old = null.
 type TaskHistory struct {
 	ID        int64           `json:"id" db:"id" example:"1"`
 	TaskID    string          `json:"task_id" db:"task_id" example:"123e4567-e89b-12d3-a456-426614174000"`
 	ChangedBy string          `json:"changed_by" db:"changed_by" example:"123e4567-e89b-12d3-a456-426614174002"`
+	Action    HistoryAction   `json:"action" db:"action" example:"updated" enums:"created,updated"`
 	Changes   json.RawMessage `json:"changes" db:"changes" swaggertype:"object"`
 	CreatedAt time.Time       `json:"created_at" db:"created_at" example:"2024-01-15T11:00:00Z"`
 }

@@ -82,7 +82,19 @@ func (s *taskService) CreateTask(ctx context.Context, userID string, req *domain
 		Version:     1,
 	}
 
-	if err := s.tasks.Create(ctx, task); err != nil {
+	// The task and its "created" history entry commit together.
+	err := s.tx.WithinTx(ctx, func(ctx context.Context) error {
+		if err := s.tasks.Create(ctx, task); err != nil {
+			return err
+		}
+		return s.recordHistory(ctx, task, userID, domain.HistoryCreated, domain.TaskChanges{
+			"title":       {New: task.Title},
+			"description": {New: task.Description},
+			"status":      {New: task.Status},
+			"assignee_id": {New: task.AssigneeID},
+		})
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -188,16 +200,7 @@ func (s *taskService) UpdateTask(ctx context.Context, userID, taskID string, req
 			return err
 		}
 
-		raw, err := json.Marshal(changes)
-		if err != nil {
-			return fmt.Errorf("marshal task changes: %w", err)
-		}
-		return s.tasks.AddHistory(ctx, &domain.TaskHistory{
-			TaskID:    task.ID,
-			ChangedBy: userID,
-			Changes:   raw,
-			CreatedAt: task.UpdatedAt,
-		})
+		return s.recordHistory(ctx, task, userID, domain.HistoryUpdated, changes)
 	})
 	if err != nil {
 		return nil, err
@@ -319,6 +322,26 @@ func (s *taskService) ListComments(ctx context.Context, userID, taskID string) (
 		return nil, err
 	}
 	return s.tasks.ListComments(ctx, taskID)
+}
+
+func (s *taskService) recordHistory(
+	ctx context.Context,
+	task *domain.Task,
+	userID string,
+	action domain.HistoryAction,
+	changes domain.TaskChanges,
+) error {
+	raw, err := json.Marshal(changes)
+	if err != nil {
+		return fmt.Errorf("marshal task changes: %w", err)
+	}
+	return s.tasks.AddHistory(ctx, &domain.TaskHistory{
+		TaskID:    task.ID,
+		ChangedBy: userID,
+		Action:    action,
+		Changes:   raw,
+		CreatedAt: task.UpdatedAt,
+	})
 }
 
 // requireMember fails with ErrAssigneeNotInTeam when userID is not in teamID.
