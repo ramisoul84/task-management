@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ramisoul84/task-management/internal/cache"
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/pkg/auth"
 )
@@ -409,17 +410,16 @@ func cacheKey(q *domain.TaskListQuery) string {
 	return string(b)
 }
 
-func (c *fakeTaskCache) Get(_ context.Context, q *domain.TaskListQuery) (*domain.TaskListResponse, bool, error) {
+func (c *fakeTaskCache) Get(_ context.Context, q *domain.TaskListQuery) (*domain.TaskListResponse, cache.Stamp, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.getErr != nil {
-		return nil, false, c.getErr
+		return nil, "", c.getErr
 	}
-	r, ok := c.entries[cacheKey(q)]
-	return r, ok, nil
+	return c.entries[cacheKey(q)], "0", nil
 }
 
-func (c *fakeTaskCache) Set(_ context.Context, q *domain.TaskListQuery, r *domain.TaskListResponse) error {
+func (c *fakeTaskCache) Set(_ context.Context, q *domain.TaskListQuery, _ cache.Stamp, r *domain.TaskListResponse) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[cacheKey(q)] = r

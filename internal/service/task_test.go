@@ -71,6 +71,12 @@ func TestCreateTask(t *testing.T) {
 		if len(f.cache.invalidated) != 1 || f.cache.invalidated[0] != teamA {
 			t.Fatalf("cache invalidations = %v, want [team-a]", f.cache.invalidated)
 		}
+		if f.tx.calls != 1 {
+			t.Fatal("task and its history must be written in one transaction")
+		}
+		if len(f.s.history) != 1 || f.s.history[0].Action != domain.HistoryCreated || f.s.history[0].ChangedBy != "other" {
+			t.Fatalf("expected one 'created' history entry, got %+v", f.s.history)
+		}
 	})
 
 	t.Run("non-member cannot create in someone else's team", func(t *testing.T) {
@@ -223,8 +229,8 @@ func TestUpdateTask_HistoryAndLifecycle(t *testing.T) {
 		if _, ok := changes["closed_at"]; !ok {
 			t.Fatal("closed_at change missing from history")
 		}
-		if f.s.history[0].ChangedBy != "creator" {
-			t.Fatalf("changed_by = %s", f.s.history[0].ChangedBy)
+		if f.s.history[0].ChangedBy != "creator" || f.s.history[0].Action != domain.HistoryUpdated {
+			t.Fatalf("unexpected history entry: %+v", f.s.history[0])
 		}
 	})
 
