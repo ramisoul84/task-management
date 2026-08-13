@@ -345,6 +345,16 @@ func (r taskRepo) UnassignUser(_ context.Context, teamID, userID, changedBy stri
 	return n, nil
 }
 
+func (r taskRepo) Delete(_ context.Context, id string) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if _, ok := r.s.tasks[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(r.s.tasks, id)
+	return nil
+}
+
 func (r taskRepo) AddHistory(_ context.Context, h *domain.TaskHistory) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()

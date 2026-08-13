@@ -26,26 +26,26 @@ func memberRole(ctx context.Context, teams repository.TeamRepository, teamID, us
 	return role, err
 }
 
-// requireTaskVisible fails unless userID belongs to the task's team. To
-// avoid leaking which task IDs exist, a task in a team the caller does not
+// visibleTask loads a task the caller may see. To avoid
+// leaking which task IDs exist, a task in a team the caller does not
 // belong to is reported as not found.
-func requireTaskVisible(
+func visibleTask(
 	ctx context.Context,
 	tasks repository.TaskRepository,
 	teams repository.TeamRepository,
 	taskID, userID string,
-) error {
+) (*domain.Task, error) {
 	task, err := tasks.GetByID(ctx, taskID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ok, err := teams.IsMember(ctx, task.TeamID, userID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !ok {
-		return domain.ErrNotFound.WithMessage("task not found")
+		return nil, domain.ErrNotFound.WithMessage("task not found")
 	}
-	return nil
+	return task, nil
 }

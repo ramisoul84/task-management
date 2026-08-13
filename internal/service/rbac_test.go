@@ -104,7 +104,7 @@ func TestTaskPermissionsFor(t *testing.T) {
 	assignee := "assignee"
 	task := &domain.Task{CreatedBy: "creator", AssigneeID: &assignee}
 
-	all := service.TaskPermissions{EditContent: true, ChangeStatus: true, Reassign: true}
+	all := service.TaskPermissions{EditContent: true, ChangeStatus: true, Reassign: true, Delete: true}
 
 	tests := []struct {
 		name   string

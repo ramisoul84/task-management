@@ -24,7 +24,9 @@ const (
 type TaskService interface {
 	CreateTask(ctx context.Context, userID string, req *domain.CreateTaskRequest) (*domain.Task, error)
 	ListTasks(ctx context.Context, userID string, q *domain.TaskListQuery) (*domain.TaskListResponse, error)
+	GetTask(ctx context.Context, userID, taskID string) (*domain.Task, error)
 	UpdateTask(ctx context.Context, userID, taskID string, req *domain.UpdateTaskRequest) (*domain.Task, error)
+	DeleteTask(ctx context.Context, userID, taskID string) error
 	GetHistory(ctx context.Context, userID, taskID string) ([]*domain.TaskHistory, error)
 	AddComment(ctx context.Context, userID, taskID string, req *domain.CreateCommentRequest) (*domain.TaskComment, error)
 	ListComments(ctx context.Context, userID, taskID string) ([]*domain.TaskComment, error)
@@ -144,6 +146,44 @@ func (s *taskService) ListTasks(ctx context.Context, userID string, q *domain.Ta
 	}
 
 	return resp, nil
+}
+
+// GetTask returns a single task visible to the caller.
+func (s *taskService) GetTask(ctx context.Context, userID, taskID string) (*domain.Task, error) {
+	task, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID)
+	return task, err
+}
+
+// DeleteTask permanently removes a task with its history and comments.
+// Owner, admin or the task's creator only.
+func (s *taskService) DeleteTask(ctx context.Context, userID, taskID string) error {
+	var teamID string
+
+	err := s.tx.WithinTx(ctx, func(ctx context.Context) error {
+		task, err := s.tasks.GetByIDForUpdate(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		role, err := s.teams.GetMemberRole(ctx, task.TeamID, userID)
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.ErrNotFound.WithMessage("task not found")
+		}
+		if err != nil {
+			return err
+		}
+		if !TaskPermissionsFor(role, userID, task).Delete {
+			return domain.ErrForbidden.WithMessage("only the task creator or a team manager can delete a task")
+		}
+		teamID = task.TeamID
+		return s.tasks.Delete(ctx, task.ID)
+	})
+	if err != nil {
+		return err
+	}
+
+	s.invalidate(ctx, teamID)
+	logger.FromContext(ctx).Info().Str("task_id", taskID).Str("team_id", teamID).Msg("task deleted")
+	return nil
 }
 
 // UpdateTask applies a partial update.
@@ -293,14 +333,14 @@ func (s *taskService) applyUpdate(
 }
 
 func (s *taskService) GetHistory(ctx context.Context, userID, taskID string) ([]*domain.TaskHistory, error) {
-	if err := requireTaskVisible(ctx, s.tasks, s.teams, taskID, userID); err != nil {
+	if _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID); err != nil {
 		return nil, err
 	}
 	return s.tasks.ListHistory(ctx, taskID)
 }
 
 func (s *taskService) AddComment(ctx context.Context, userID, taskID string, req *domain.CreateCommentRequest) (*domain.TaskComment, error) {
-	if err := requireTaskVisible(ctx, s.tasks, s.teams, taskID, userID); err != nil {
+	if _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID); err != nil {
 		return nil, err
 	}
 
@@ -318,7 +358,7 @@ func (s *taskService) AddComment(ctx context.Context, userID, taskID string, req
 }
 
 func (s *taskService) ListComments(ctx context.Context, userID, taskID string) ([]*domain.TaskComment, error) {
-	if err := requireTaskVisible(ctx, s.tasks, s.teams, taskID, userID); err != nil {
+	if _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID); err != nil {
 		return nil, err
 	}
 	return s.tasks.ListComments(ctx, taskID)

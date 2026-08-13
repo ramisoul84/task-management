@@ -28,6 +28,8 @@ type TaskRepository interface {
 	// recording a history entry for each affected task. Returns the number
 	// of tasks changed.
 	UnassignUser(ctx context.Context, teamID, userID, changedBy string) (int, error)
+	// Delete removes the task; history and comments cascade.
+	Delete(ctx context.Context, id string) error
 
 	AddHistory(ctx context.Context, h *domain.TaskHistory) error
 	ListHistory(ctx context.Context, taskID string) ([]*domain.TaskHistory, error)
@@ -183,6 +185,14 @@ func (r *taskRepo) UnassignUser(ctx context.Context, teamID, userID, changedBy s
 		return 0, fmt.Errorf("taskRepo.UnassignUser: rows affected: %w", err)
 	}
 	return int(n), nil
+}
+
+func (r *taskRepo) Delete(ctx context.Context, id string) error {
+	res, err := r.db.Q(ctx).ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("taskRepo.Delete: %w", err)
+	}
+	return requireAffected(res, domain.ErrNotFound.WithMessage("task not found"))
 }
 
 func (r *taskRepo) AddHistory(ctx context.Context, h *domain.TaskHistory) error {
