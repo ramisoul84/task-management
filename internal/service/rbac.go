@@ -79,6 +79,7 @@ type TaskPermissions struct {
 	EditContent  bool // title, description
 	ChangeStatus bool
 	Reassign     bool
+	Delete       bool
 }
 
 // Any reports whether the user may change the task at all.
@@ -88,12 +89,12 @@ func (p TaskPermissions) Any() bool { return p.EditContent || p.ChangeStatus || 
 // may change on task:
 //   - owner/admin: everything
 //   - task creator: everything (new assignee must still be in the team)
-//   - assignee: status only — they cannot reassign the task
+//   - assignee: status only — they cannot reassign or delete the task
 //   - anyone else: nothing
 func TaskPermissionsFor(role domain.Role, userID string, task *domain.Task) TaskPermissions {
 	switch {
 	case role.IsManager(), task.CreatedBy == userID:
-		return TaskPermissions{EditContent: true, ChangeStatus: true, Reassign: true}
+		return TaskPermissions{EditContent: true, ChangeStatus: true, Reassign: true, Delete: true}
 	case task.IsAssignee(userID):
 		return TaskPermissions{ChangeStatus: true}
 	default:

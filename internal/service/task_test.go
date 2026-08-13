@@ -290,6 +290,50 @@ func TestUpdateTask_HistoryAndLifecycle(t *testing.T) {
 	})
 }
 
+func TestGetTask(t *testing.T) {
+	ctx := context.Background()
+	f := newTaskFixture(t)
+
+	task, err := f.svc.GetTask(ctx, "other", taskT)
+	wantErr(t, err, nil)
+	if task.ID != taskT {
+		t.Fatalf("got task %s", task.ID)
+	}
+
+	_, err = f.svc.GetTask(ctx, "outsider", taskT)
+	wantErr(t, err, domain.ErrNotFound)
+}
+
+func TestDeleteTask(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		user string
+		want error
+	}{
+		{"owner", nil},
+		{"admin", nil},
+		{"creator", nil},
+		{"assignee", domain.ErrForbidden},
+		{"other", domain.ErrForbidden},
+		{"outsider", domain.ErrNotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.user, func(t *testing.T) {
+			f := newTaskFixture(t)
+			wantErr(t, f.svc.DeleteTask(ctx, tc.user, taskT), tc.want)
+
+			_, exists := f.s.tasks[taskT]
+			if exists == (tc.want == nil) {
+				t.Fatalf("task exists = %v after delete by %s", exists, tc.user)
+			}
+			if tc.want == nil && len(f.cache.invalidated) != 1 {
+				t.Fatal("delete must invalidate the team's task cache")
+			}
+		})
+	}
+}
+
 func TestHistoryAndComments_Visibility(t *testing.T) {
 	ctx := context.Background()
 	f := newTaskFixture(t)

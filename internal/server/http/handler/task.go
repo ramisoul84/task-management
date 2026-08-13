@@ -85,6 +85,64 @@ func (h *TaskHandler) ListByTeam(c *fiber.Ctx) error {
 	return c.JSON(res)
 }
 
+// Get godoc
+//
+//	@Summary	Get a task
+//	@Tags		Tasks
+//	@Security	BearerAuth
+//	@Produce	json
+//	@Param		id	path		string	true	"Task ID"	format(uuid)
+//	@Success	200	{object}	domain.Task
+//	@Failure	400	{object}	ErrorResponse
+//	@Failure	401	{object}	ErrorResponse
+//	@Failure	404	{object}	ErrorResponse	"Task not found"
+//	@Router		/tasks/{id} [get]
+func (h *TaskHandler) Get(c *fiber.Ctx) error {
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+	taskID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
+	}
+
+	task, err := h.svc.GetTask(c.UserContext(), userID, taskID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(task)
+}
+
+// Delete godoc
+//
+//	@Summary		Delete a task
+//	@Description	Permanently deletes the task with its history and comments. Owner, admin or the task's creator only.
+//	@Tags			Tasks
+//	@Security		BearerAuth
+//	@Param			id	path	string	true	"Task ID"	format(uuid)
+//	@Success		204
+//	@Failure		400	{object}	ErrorResponse
+//	@Failure		401	{object}	ErrorResponse
+//	@Failure		403	{object}	ErrorResponse
+//	@Failure		404	{object}	ErrorResponse	"Task not found"
+//	@Router			/tasks/{id} [delete]
+func (h *TaskHandler) Delete(c *fiber.Ctx) error {
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+	taskID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
+	}
+
+	if err := h.svc.DeleteTask(c.UserContext(), userID, taskID); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
 // Update godoc
 //
 //	@Summary		Update a task
