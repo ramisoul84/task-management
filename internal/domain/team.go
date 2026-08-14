@@ -63,6 +63,7 @@ type TeamStats struct {
 	AvgCloseTime  float64            `json:"avg_close_time_hours" example:"48.5"`
 	TotalComments int                `json:"total_comments" example:"25"`
 	TotalTasks    int                `json:"total_tasks" example:"20"`
+	OverdueTasks  int                `json:"overdue_tasks" example:"3"`
 }
 
 // TopPerformer represents a user with closed tasks count

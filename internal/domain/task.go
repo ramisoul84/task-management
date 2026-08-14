@@ -21,19 +21,52 @@ var TaskStatuses = []TaskStatus{
 	TaskStatusTodo, TaskStatusInProgress, TaskStatusReview, TaskStatusDone, TaskStatusCancelled,
 }
 
+// IsTerminal reports whether no further work is expected.
+func (s TaskStatus) IsTerminal() bool {
+	return s == TaskStatusDone || s == TaskStatusCancelled
+}
+
+// TaskPriority orders tasks by urgency.
+type TaskPriority string
+
+const (
+	PriorityLow    TaskPriority = "low"
+	PriorityMedium TaskPriority = "medium"
+	PriorityHigh   TaskPriority = "high"
+	PriorityUrgent TaskPriority = "urgent"
+)
+
+// TaskPriorities lists every valid priority, lowest first.
+var TaskPriorities = []TaskPriority{PriorityLow, PriorityMedium, PriorityHigh, PriorityUrgent}
+
+// Sort fields accepted by GET /tasks.
+const (
+	SortCreatedAt = "created_at"
+	SortUpdatedAt = "updated_at"
+	SortDueAt     = "due_at"
+	SortPriority  = "priority"
+)
+
 // Task is a unit of work inside a team.
 type Task struct {
-	ID          string     `json:"id" db:"id" example:"123e4567-e89b-12d3-a456-426614174000"`
-	TeamID      string     `json:"team_id" db:"team_id" example:"123e4567-e89b-12d3-a456-426614174001"`
-	Title       string     `json:"title" db:"title" example:"Fix login bug"`
-	Description string     `json:"description,omitempty" db:"description" example:"Users cannot login with Google OAuth"`
-	Status      TaskStatus `json:"status" db:"status" example:"todo"`
-	CreatedBy   string     `json:"created_by" db:"created_by" example:"123e4567-e89b-12d3-a456-426614174002"`
-	AssigneeID  *string    `json:"assignee_id,omitempty" db:"assignee_id" example:"123e4567-e89b-12d3-a456-426614174003"`
-	CreatedAt   time.Time  `json:"created_at" db:"created_at" example:"2024-01-15T10:30:00Z"`
-	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at" example:"2024-01-15T10:30:00Z"`
-	ClosedAt    *time.Time `json:"closed_at,omitempty" db:"closed_at" example:"2024-01-16T15:00:00Z"`
-	Version     int        `json:"version" db:"version" example:"1"`
+	ID          string       `json:"id" db:"id" example:"123e4567-e89b-12d3-a456-426614174000"`
+	TeamID      string       `json:"team_id" db:"team_id" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Title       string       `json:"title" db:"title" example:"Fix login bug"`
+	Description string       `json:"description,omitempty" db:"description" example:"Users cannot login with Google OAuth"`
+	Status      TaskStatus   `json:"status" db:"status" example:"todo"`
+	Priority    TaskPriority `json:"priority" db:"priority" example:"medium"`
+	DueAt       *time.Time   `json:"due_at,omitempty" db:"due_at" example:"2024-02-01T17:00:00Z"`
+	CreatedBy   string       `json:"created_by" db:"created_by" example:"123e4567-e89b-12d3-a456-426614174002"`
+	AssigneeID  *string      `json:"assignee_id,omitempty" db:"assignee_id" example:"123e4567-e89b-12d3-a456-426614174003"`
+	CreatedAt   time.Time    `json:"created_at" db:"created_at" example:"2024-01-15T10:30:00Z"`
+	UpdatedAt   time.Time    `json:"updated_at" db:"updated_at" example:"2024-01-15T10:30:00Z"`
+	ClosedAt    *time.Time   `json:"closed_at,omitempty" db:"closed_at" example:"2024-01-16T15:00:00Z"`
+	Version     int          `json:"version" db:"version" example:"1"`
+}
+
+// IsOverdue reports whether the task is past due and still open.
+func (t *Task) IsOverdue(now time.Time) bool {
+	return t.DueAt != nil && t.DueAt.Before(now) && !t.Status.IsTerminal()
 }
 
 // IsAssignee reports whether userID is the task's assignee.
@@ -43,19 +76,26 @@ func (t *Task) IsAssignee(userID string) bool {
 
 // CreateTaskRequest is the body of POST /tasks.
 type CreateTaskRequest struct {
-	TeamID      string  `json:"team_id" validate:"required,uuid" example:"123e4567-e89b-12d3-a456-426614174001"`
-	Title       string  `json:"title" validate:"required,notblank,min=3,max=255" example:"Fix login bug"`
-	Description string  `json:"description" validate:"max=5000" example:"Users cannot login with Google OAuth"`
-	AssigneeID  *string `json:"assignee_id,omitempty" validate:"omitempty,uuid" example:"123e4567-e89b-12d3-a456-426614174003"`
+	TeamID      string       `json:"team_id" validate:"required,uuid" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Title       string       `json:"title" validate:"required,notblank,min=3,max=255" example:"Fix login bug"`
+	Description string       `json:"description" validate:"max=5000" example:"Users cannot login with Google OAuth"`
+	AssigneeID  *string      `json:"assignee_id,omitempty" validate:"omitempty,uuid" example:"123e4567-e89b-12d3-a456-426614174003"`
+	Priority    TaskPriority `json:"priority,omitempty" validate:"omitempty,oneof=low medium high urgent" example:"high"`
+	DueAt       *time.Time   `json:"due_at,omitempty" example:"2024-02-01T17:00:00Z"`
 }
 
-// TaskListQuery holds GET /tasks filters and pagination.
+// TaskListQuery holds GET /tasks filters, sorting and pagination.
 type TaskListQuery struct {
-	TeamID     string     `query:"team_id" validate:"required,uuid" example:"123e4567-e89b-12d3-a456-426614174001"`
-	Status     TaskStatus `query:"status" validate:"omitempty,oneof=todo in_progress review done cancelled" example:"todo"`
-	AssigneeID string     `query:"assignee_id" validate:"omitempty,uuid" example:"123e4567-e89b-12d3-a456-426614174003"`
-	Limit      int        `query:"limit" validate:"gte=0,lte=100" example:"20"`
-	Offset     int        `query:"offset" validate:"gte=0" example:"0"`
+	TeamID     string       `query:"team_id" validate:"required,uuid" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Status     TaskStatus   `query:"status" validate:"omitempty,oneof=todo in_progress review done cancelled" example:"todo"`
+	AssigneeID string       `query:"assignee_id" validate:"omitempty,uuid" example:"123e4567-e89b-12d3-a456-426614174003"`
+	Priority   TaskPriority `query:"priority" validate:"omitempty,oneof=low medium high urgent" example:"high"`
+	Overdue    bool         `query:"overdue" example:"false"`
+	Search     string       `query:"q" validate:"max=100" example:"login"`
+	Sort       string       `query:"sort" validate:"omitempty,oneof=created_at updated_at due_at priority" example:"created_at"`
+	Order      string       `query:"order" validate:"omitempty,oneof=asc desc" example:"desc"`
+	Limit      int          `query:"limit" validate:"gte=0,lte=100" example:"20"`
+	Offset     int          `query:"offset" validate:"gte=0" example:"0"`
 }
 
 // TaskListResponse is a page of tasks.
@@ -71,16 +111,20 @@ type TaskListResponse struct {
 // unchanged; send "assignee_id": "" to unassign. Version must equal the
 // task's current version (optimistic concurrency control).
 type UpdateTaskRequest struct {
-	Title       *string     `json:"title,omitempty" validate:"omitempty,notblank,min=3,max=255" example:"Fix critical login bug"`
-	Description *string     `json:"description,omitempty" validate:"omitempty,max=5000" example:"Users cannot login with Google OAuth on mobile"`
-	Status      *TaskStatus `json:"status,omitempty" validate:"omitempty,oneof=todo in_progress review done cancelled" example:"in_progress"`
-	AssigneeID  *string     `json:"assignee_id,omitempty" validate:"omitempty,uuid" example:"123e4567-e89b-12d3-a456-426614174003"`
-	Version     int         `json:"version" validate:"required,min=1" example:"1"`
+	Title       *string       `json:"title,omitempty" validate:"omitempty,notblank,min=3,max=255" example:"Fix critical login bug"`
+	Description *string       `json:"description,omitempty" validate:"omitempty,max=5000" example:"Users cannot login with Google OAuth on mobile"`
+	Status      *TaskStatus   `json:"status,omitempty" validate:"omitempty,oneof=todo in_progress review done cancelled" example:"in_progress"`
+	AssigneeID  *string       `json:"assignee_id,omitempty" validate:"omitempty,uuid" example:"123e4567-e89b-12d3-a456-426614174003"`
+	Priority    *TaskPriority `json:"priority,omitempty" validate:"omitempty,oneof=low medium high urgent" example:"urgent"`
+	// DueAt: omit to keep, null to clear, a timestamp to set.
+	DueAt   Nullable[time.Time] `json:"due_at" swaggertype:"string" format:"date-time" extensions:"x-nullable" example:"2024-02-01T17:00:00Z"`
+	Version int                 `json:"version" validate:"required,min=1" example:"1"`
 }
 
 // IsEmpty reports whether the request changes nothing.
 func (r *UpdateTaskRequest) IsEmpty() bool {
-	return r.Title == nil && r.Description == nil && r.Status == nil && r.AssigneeID == nil
+	return r.Title == nil && r.Description == nil && r.Status == nil && r.AssigneeID == nil &&
+		r.Priority == nil && !r.DueAt.Set
 }
 
 // CreateCommentRequest is the body of POST /tasks/{id}/comments.

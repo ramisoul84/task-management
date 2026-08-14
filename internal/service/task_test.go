@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/internal/service"
@@ -174,6 +175,11 @@ func TestUpdateTask_Permissions(t *testing.T) {
 		{"unrelated member cannot edit", "other", domain.UpdateTaskRequest{Status: ptr(domain.TaskStatusDone)}, domain.ErrForbidden},
 		{"outsider sees not found", "outsider", domain.UpdateTaskRequest{Title: ptr("x")}, domain.ErrNotFound},
 		{"assignee must be in team", "owner", domain.UpdateTaskRequest{AssigneeID: ptr("outsider")}, domain.ErrAssigneeNotInTeam},
+		{"creator sets priority", "creator", domain.UpdateTaskRequest{Priority: ptr(domain.PriorityUrgent)}, nil},
+		{"assignee cannot change priority", "assignee", domain.UpdateTaskRequest{Priority: ptr(domain.PriorityUrgent)}, domain.ErrForbidden},
+		{"assignee cannot change due date", "assignee", domain.UpdateTaskRequest{
+			DueAt: domain.Nullable[time.Time]{Set: true, Valid: true, Value: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)},
+		}, domain.ErrForbidden},
 	}
 
 	for _, tc := range tests {
@@ -287,6 +293,73 @@ func TestUpdateTask_HistoryAndLifecycle(t *testing.T) {
 		f := newTaskFixture(t)
 		_, err := f.svc.UpdateTask(ctx, "owner", "missing", &domain.UpdateTaskRequest{Title: ptr("x"), Version: 1})
 		wantErr(t, err, domain.ErrNotFound)
+	})
+}
+
+func TestTask_PriorityAndDueDate(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("defaults to medium priority", func(t *testing.T) {
+		f := newTaskFixture(t)
+		task, err := f.svc.CreateTask(ctx, "owner", &domain.CreateTaskRequest{TeamID: teamA, Title: "Defaults"})
+		wantErr(t, err, nil)
+		if task.Priority != domain.PriorityMedium || task.DueAt != nil {
+			t.Fatalf("priority=%s due=%v", task.Priority, task.DueAt)
+		}
+	})
+
+	t.Run("due date is normalised to UTC", func(t *testing.T) {
+		f := newTaskFixture(t)
+		local := time.Date(2030, 6, 1, 12, 30, 15, 999, time.FixedZone("MSK", 3*3600))
+		task, err := f.svc.CreateTask(ctx, "owner", &domain.CreateTaskRequest{TeamID: teamA, Title: "Due", DueAt: &local})
+		wantErr(t, err, nil)
+		if task.DueAt.Location() != time.UTC || task.DueAt.Hour() != 9 || task.DueAt.Nanosecond() != 0 {
+			t.Fatalf("due_at = %v, want 09:30:15 UTC", task.DueAt)
+		}
+	})
+
+	t.Run("absurd due date is rejected", func(t *testing.T) {
+		f := newTaskFixture(t)
+		old := time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC)
+		_, err := f.svc.CreateTask(ctx, "owner", &domain.CreateTaskRequest{TeamID: teamA, Title: "Old", DueAt: &old})
+		wantErr(t, err, domain.ErrInvalidInput)
+	})
+
+	t.Run("set then clear due date, both recorded in history", func(t *testing.T) {
+		f := newTaskFixture(t)
+		due := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		task, err := f.svc.UpdateTask(ctx, "creator", taskT, &domain.UpdateTaskRequest{
+			DueAt: domain.Nullable[time.Time]{Set: true, Valid: true, Value: due}, Version: 1,
+		})
+		wantErr(t, err, nil)
+		if task.DueAt == nil || !task.DueAt.Equal(due) {
+			t.Fatalf("due_at = %v", task.DueAt)
+		}
+
+		task, err = f.svc.UpdateTask(ctx, "creator", taskT, &domain.UpdateTaskRequest{
+			DueAt: domain.Nullable[time.Time]{Set: true}, Version: 2,
+		})
+		wantErr(t, err, nil)
+		if task.DueAt != nil {
+			t.Fatal("explicit null must clear the due date")
+		}
+		if len(f.s.history) != 2 {
+			t.Fatalf("history entries = %d, want 2", len(f.s.history))
+		}
+	})
+
+	t.Run("overdue filter", func(t *testing.T) {
+		f := newTaskFixture(t)
+		past := time.Now().Add(-time.Hour)
+		f.s.addTask(domain.Task{ID: "late", TeamID: teamA, CreatedBy: "owner", DueAt: &past})
+		f.s.addTask(domain.Task{ID: "late-but-done", TeamID: teamA, CreatedBy: "owner", DueAt: &past, Status: domain.TaskStatusDone})
+
+		res, err := f.svc.ListTasks(ctx, "owner", &domain.TaskListQuery{TeamID: teamA, Overdue: true})
+		wantErr(t, err, nil)
+		if res.Total != 1 || res.Tasks[0].ID != "late" {
+			t.Fatalf("overdue tasks = %+v", res.Tasks)
+		}
 	})
 }
 

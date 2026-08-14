@@ -2,6 +2,8 @@ package cache
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,9 +62,12 @@ func genKey(teamID string) string {
 	return "tasks:{" + teamID + "}:gen"
 }
 
+// pageKey hashes the whole query, so every filter, sort and page field is
+// part of the key automatically, including ones added later.
 func pageKey(q *domain.TaskListQuery, gen Stamp) string {
-	return fmt.Sprintf("tasks:{%s}:g%s:s=%s:a=%s:l=%d:o=%d",
-		q.TeamID, gen, q.Status, q.AssigneeID, q.Limit, q.Offset)
+	raw, _ := json.Marshal(q) // plain struct of strings/ints: cannot fail
+	sum := sha256.Sum256(raw)
+	return "tasks:{" + q.TeamID + "}:g" + string(gen) + ":" + hex.EncodeToString(sum[:12])
 }
 
 func (c *taskCache) generation(ctx context.Context, teamID string) (Stamp, error) {

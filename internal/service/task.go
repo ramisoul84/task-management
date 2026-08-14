@@ -70,6 +70,16 @@ func (s *taskService) CreateTask(ctx context.Context, userID string, req *domain
 		return nil, err
 	}
 
+	dueAt, err := normalizeDueAt(req.DueAt)
+	if err != nil {
+		return nil, err
+	}
+
+	priority := req.Priority
+	if priority == "" {
+		priority = domain.PriorityMedium
+	}
+
 	now := s.now()
 	task := &domain.Task{
 		ID:          uuid.NewString(),
@@ -77,6 +87,8 @@ func (s *taskService) CreateTask(ctx context.Context, userID string, req *domain
 		Title:       strings.TrimSpace(req.Title),
 		Description: strings.TrimSpace(req.Description),
 		Status:      domain.TaskStatusTodo,
+		Priority:    priority,
+		DueAt:       dueAt,
 		CreatedBy:   userID,
 		AssigneeID:  &assignee,
 		CreatedAt:   now,
@@ -85,7 +97,7 @@ func (s *taskService) CreateTask(ctx context.Context, userID string, req *domain
 	}
 
 	// The task and its "created" history entry commit together.
-	err := s.tx.WithinTx(ctx, func(ctx context.Context) error {
+	err = s.tx.WithinTx(ctx, func(ctx context.Context) error {
 		if err := s.tasks.Create(ctx, task); err != nil {
 			return err
 		}
@@ -93,6 +105,8 @@ func (s *taskService) CreateTask(ctx context.Context, userID string, req *domain
 			"title":       {New: task.Title},
 			"description": {New: task.Description},
 			"status":      {New: task.Status},
+			"priority":    {New: task.Priority},
+			"due_at":      {New: task.DueAt},
 			"assignee_id": {New: task.AssigneeID},
 		})
 	})
@@ -291,6 +305,28 @@ func (s *taskService) applyUpdate(
 		}
 	}
 
+	if req.Priority != nil && *req.Priority != task.Priority {
+		if !perms.EditContent {
+			return nil, domain.ErrForbidden.WithMessage("only the task creator or a team manager can change the priority")
+		}
+		changes["priority"] = domain.FieldChange{Old: task.Priority, New: *req.Priority}
+		task.Priority = *req.Priority
+	}
+
+	if req.DueAt.Set {
+		next, err := normalizeDueAt(req.DueAt.Ptr())
+		if err != nil {
+			return nil, err
+		}
+		if !sameTime(task.DueAt, next) {
+			if !perms.EditContent {
+				return nil, domain.ErrForbidden.WithMessage("only the task creator or a team manager can change the due date")
+			}
+			changes["due_at"] = domain.FieldChange{Old: task.DueAt, New: next}
+			task.DueAt = next
+		}
+	}
+
 	if req.Status != nil && *req.Status != task.Status {
 		if !perms.ChangeStatus {
 			return nil, domain.ErrForbidden.WithMessage("you cannot change the status of this task")
@@ -412,6 +448,26 @@ func normalizePage(q *domain.TaskListQuery) {
 	if q.Offset < 0 {
 		q.Offset = 0
 	}
+}
+
+// normalizeDueAt stores due dates in UTC at second precision and rejects
+// values outside a sane range (MySQL DATETIME covers years 1000-9999).
+func normalizeDueAt(t *time.Time) (*time.Time, error) {
+	if t == nil {
+		return nil, nil
+	}
+	u := t.UTC().Truncate(time.Second)
+	if u.Year() < 2000 || u.Year() > 9999 {
+		return nil, domain.ErrInvalidInput.WithMessage("due_at must be between the years 2000 and 9999")
+	}
+	return &u, nil
+}
+
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }
 
 func sameAssignee(a, b *string) bool {
