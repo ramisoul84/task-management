@@ -64,6 +64,7 @@ type SecurityConfig struct {
 	CookieSecure    bool
 	CookieSameSite  string
 	Issuer          string
+	Cost            int
 }
 
 func Load(env string) *Config {
@@ -116,13 +117,14 @@ func Load(env string) *Config {
 		},
 
 		Security: SecurityConfig{
-			Secret:          mustGetEnv("AUTH_SECRET"),
-			AccessTokenTTL:  getEnvDuration("AUTH_ACCESS_TOKEN_TTL", 15*time.Minute),
-			RefreshTokenTTL: getEnvDuration("AUTH_REFRESH_TOKEN_TTL", 24*time.Hour),
-			CookieDomain:    getEnv("AUTH_COOKIE_DOMAIN", ""),
-			CookieSecure:    getEnvBool("AUTH_COOKIE_SECURE", false),
-			CookieSameSite:  getEnv("AUTH_COOKIE_SAME_SITE", "LAX"),
-			Issuer:          getEnv("AUTH_ISSUER", "task-management"),
+			Secret:          mustGetEnv("SECRET"),
+			AccessTokenTTL:  getEnvDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
+			RefreshTokenTTL: getEnvDuration("REFRESH_TOKEN_TTL", 24*time.Hour),
+			CookieDomain:    getEnv("COOKIE_DOMAIN", ""),
+			CookieSecure:    getEnvBool("COOKIE_SECURE", false),
+			CookieSameSite:  getEnv("COOKIE_SAME_SITE", "LAX"),
+			Issuer:          getEnv("ISSUER", "task-management"),
+			Cost:            getEnvInt("COST", 12),
 		},
 	}
 	return cfg

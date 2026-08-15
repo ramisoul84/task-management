@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/ramisoul84/task-management/internal/config"
+	"github.com/ramisoul84/task-management/internal/server/http/handler"
 	"github.com/ramisoul84/task-management/pkg/cache"
 	"github.com/ramisoul84/task-management/pkg/database"
 	"github.com/ramisoul84/task-management/pkg/logger"
@@ -21,7 +22,13 @@ type Server struct {
 	log   *logger.Logger
 }
 
-func NewServer(cfg *config.Config, log *logger.Logger, db *database.DB, cache *cache.Cache) *Server {
+func NewServer(
+	cfg *config.Config,
+	log *logger.Logger,
+	db *database.DB,
+	cache *cache.Cache,
+	authHandler *handler.AuthHandler,
+) *Server {
 	app := fiber.New(fiber.Config{
 		AppName:               cfg.App.Name,
 		DisableStartupMessage: true,
@@ -39,12 +46,12 @@ func NewServer(cfg *config.Config, log *logger.Logger, db *database.DB, cache *c
 		log:   log,
 	}
 
-	server.registerRoutes()
+	server.registerRoutes(authHandler)
 
 	return server
 }
 
-func (s *Server) registerRoutes() {
+func (s *Server) registerRoutes(authHandler *handler.AuthHandler) {
 	s.app.Use(cors.New(cors.Config{
 		AllowOrigins: s.cfg.HTTP.AllowedOrigins,
 	}))
@@ -52,7 +59,13 @@ func (s *Server) registerRoutes() {
 	s.app.Get("/health", s.health)
 
 	api := s.app.Group("/api/v1")
-	_ = api
+
+	auth := api.Group("/auth")
+
+	auth.Post("/register", authHandler.Register)
+	auth.Post("/login", authHandler.Login)
+	auth.Post("/refresh", authHandler.Refresh)
+	auth.Post("/logout", authHandler.Logout)
 }
 
 func (s *Server) health(c *fiber.Ctx) error {

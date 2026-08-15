@@ -6,10 +6,15 @@ import (
 	"time"
 
 	"github.com/ramisoul84/task-management/internal/config"
+	"github.com/ramisoul84/task-management/internal/repository"
 	"github.com/ramisoul84/task-management/internal/server/http"
+	"github.com/ramisoul84/task-management/internal/server/http/handler"
+	"github.com/ramisoul84/task-management/internal/service"
+	"github.com/ramisoul84/task-management/pkg/auth"
 	"github.com/ramisoul84/task-management/pkg/cache"
 	"github.com/ramisoul84/task-management/pkg/database"
 	"github.com/ramisoul84/task-management/pkg/logger"
+	"github.com/ramisoul84/task-management/pkg/validator"
 )
 
 type App struct {
@@ -21,19 +26,13 @@ type App struct {
 }
 
 func New(cfg *config.Config) (*App, error) {
-	log := logger.New(
-		cfg.Logging.Level,
-		cfg.App.Name,
-		cfg.IsDevelopment(),
-	)
-
+	log := logger.New(cfg.Logging.Level, cfg.App.Name, cfg.IsDevelopment())
 	log.Info().Msg("starting task management")
 
 	db, err := database.NewMySQL(cfg.DB)
 	if err != nil {
 		return nil, fmt.Errorf("connect database: %w", err)
 	}
-
 	log.Info().Msg("database connected")
 
 	redisCache, err := cache.New(cfg.Cache)
@@ -41,14 +40,29 @@ func New(cfg *config.Config) (*App, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("connect redis: %w", err)
 	}
-
 	log.Info().Msg("cache connected")
 
+	// utilities
+	hasher := auth.NewHasher(cfg.Security.Cost)
+	token := auth.NewTokenService(cfg.Security)
+	requestValidator := validator.New()
+
 	// Repositories
+	userRepo := repository.NewUserRepository(db, log)
+	refreshTokenRepo := repository.NewRefreshTokenRepository(redisCache, log, cfg.Security.RefreshTokenTTL)
 
 	// Services
+	authService := service.NewAuthService(
+		userRepo,
+		refreshTokenRepo,
+		token,
+		hasher,
+		log,
+		cfg.Security.AccessTokenTTL,
+	)
 
 	// Handlers
+	authHandler := handler.NewAuthHandler(authService, requestValidator, cfg.Security)
 
 	// HTTP server
 	server := http.NewServer(
@@ -56,6 +70,7 @@ func New(cfg *config.Config) (*App, error) {
 		log,
 		db,
 		redisCache,
+		authHandler,
 	)
 
 	return &App{
