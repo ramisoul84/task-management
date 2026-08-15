@@ -149,7 +149,7 @@ func (r *teamRepo) ListMembers(ctx context.Context, teamID string) ([]*domain.Te
 func (r *teamRepo) GetStats(ctx context.Context, teamID string) (*domain.TeamStats, error) {
 	const q = `
 		WITH team_tasks AS (
-			SELECT id, status, assignee_id, created_at, closed_at
+			SELECT id, status, assignee_id, created_at, closed_at, due_at
 			FROM tasks
 			WHERE team_id = ?
 		),
@@ -161,6 +161,9 @@ func (r *teamRepo) GetStats(ctx context.Context, teamID string) (*domain.TeamSta
 				COALESCE(SUM(status = 'review'), 0)          AS review_count,
 				COALESCE(SUM(status = 'done'), 0)            AS done_count,
 				COALESCE(SUM(status = 'cancelled'), 0)       AS cancelled_count,
+				COALESCE(SUM(due_at < UTC_TIMESTAMP()
+				             AND status NOT IN ('done', 'cancelled')), 0)
+				                                             AS overdue_count,
 				AVG(CASE WHEN status = 'done' AND closed_at IS NOT NULL
 				         THEN TIMESTAMPDIFF(SECOND, created_at, closed_at) END) / 3600.0
 				                                             AS avg_close_hours
@@ -183,7 +186,7 @@ func (r *teamRepo) GetStats(ctx context.Context, teamID string) (*domain.TeamSta
 		)
 		SELECT
 			s.total_tasks, s.todo_count, s.in_progress_count, s.review_count,
-			s.done_count, s.cancelled_count, s.avg_close_hours,
+			s.done_count, s.cancelled_count, s.overdue_count, s.avg_close_hours,
 			cc.total_comments,
 			tp.user_id, tp.user_name, tp.closed_tasks
 		FROM status_counts s
@@ -210,7 +213,7 @@ func (r *teamRepo) GetStats(ctx context.Context, teamID string) (*domain.TeamSta
 			closed                                    sql.NullInt64
 		)
 		if err := rows.Scan(
-			&stats.TotalTasks, &todo, &inProgress, &review, &done, &cancelled, &avgHours,
+			&stats.TotalTasks, &todo, &inProgress, &review, &done, &cancelled, &stats.OverdueTasks, &avgHours,
 			&stats.TotalComments,
 			&userID, &userName, &closed,
 		); err != nil {

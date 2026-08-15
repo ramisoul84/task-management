@@ -46,17 +46,17 @@ func NewTaskRepository(db *database.DB) TaskRepository {
 	return &taskRepo{db: db}
 }
 
-const taskColumns = `id, team_id, title, description, status, created_by, assignee_id,
+const taskColumns = `id, team_id, title, description, status, priority, due_at, created_by, assignee_id,
 	created_at, updated_at, closed_at, version`
 
 func (r *taskRepo) Create(ctx context.Context, t *domain.Task) error {
 	const q = `
-		INSERT INTO tasks (id, team_id, title, description, status, created_by, assignee_id,
+		INSERT INTO tasks (id, team_id, title, description, status, priority, due_at, created_by, assignee_id,
 		                   created_at, updated_at, closed_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := r.db.Q(ctx).ExecContext(ctx, q,
-		t.ID, t.TeamID, t.Title, t.Description, t.Status, t.CreatedBy, t.AssigneeID,
+		t.ID, t.TeamID, t.Title, t.Description, t.Status, t.Priority, t.DueAt, t.CreatedBy, t.AssigneeID,
 		t.CreatedAt, t.UpdatedAt, t.ClosedAt, t.Version,
 	)
 	if err != nil {
@@ -87,7 +87,8 @@ func (r *taskRepo) getOne(ctx context.Context, q, id string) (*domain.Task, erro
 	return &t, nil
 }
 
-// filter builds the shared WHERE clause for List and Count.
+// filter builds the shared WHERE clause for List and Count. Every value is
+// a bound parameter.
 func filter(q *domain.TaskListQuery) (string, []any) {
 	var sb strings.Builder
 	args := []any{q.TeamID}
@@ -101,17 +102,52 @@ func filter(q *domain.TaskListQuery) (string, []any) {
 		sb.WriteString(" AND assignee_id = ?")
 		args = append(args, q.AssigneeID)
 	}
+	if q.Priority != "" {
+		sb.WriteString(" AND priority = ?")
+		args = append(args, q.Priority)
+	}
+	if q.Overdue {
+		sb.WriteString(" AND due_at < UTC_TIMESTAMP() AND status NOT IN ('done', 'cancelled')")
+	}
+	if q.Search != "" {
+		sb.WriteString(" AND title LIKE ?")
+		args = append(args, "%"+escapeLike(q.Search)+"%")
+	}
 
 	return sb.String(), args
+}
+
+// orderBy maps the validated sort field to SQL. Every ordering ends with
+// id so it is total: pages never overlap or skip rows when values tie.
+func orderBy(q *domain.TaskListQuery) string {
+	dir := "DESC"
+	if q.Order == "asc" {
+		dir = "ASC"
+	}
+
+	switch q.Sort {
+	case domain.SortUpdatedAt:
+		return " ORDER BY updated_at " + dir + ", id " + dir
+	case domain.SortDueAt:
+		// Tasks without a due date go last in either direction.
+		return " ORDER BY due_at IS NULL, due_at " + dir + ", id " + dir
+	case domain.SortPriority:
+		// ENUM columns sort by declaration order: low < ... < urgent.
+		return " ORDER BY priority " + dir + ", created_at DESC, id DESC"
+	default:
+		return " ORDER BY created_at " + dir + ", id " + dir
+	}
+}
+
+// escapeLike makes user input match literally inside LIKE '%...%'.
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
 func (r *taskRepo) List(ctx context.Context, q *domain.TaskListQuery) ([]*domain.Task, error) {
 	where, args := filter(q)
 
-	// (created_at, id) is a total order, so pages never overlap or skip
-	// rows even when many tasks share a timestamp.
-	query := `SELECT ` + taskColumns + ` FROM tasks` + where +
-		` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+	query := `SELECT ` + taskColumns + ` FROM tasks` + where + orderBy(q) + ` LIMIT ? OFFSET ?`
 	args = append(args, q.Limit, q.Offset)
 
 	tasks := make([]*domain.Task, 0, q.Limit)
@@ -134,12 +170,12 @@ func (r *taskRepo) Count(ctx context.Context, q *domain.TaskListQuery) (int, err
 func (r *taskRepo) Update(ctx context.Context, t *domain.Task, expectedVersion int) error {
 	const q = `
 		UPDATE tasks
-		SET title = ?, description = ?, status = ?, assignee_id = ?, closed_at = ?,
+		SET title = ?, description = ?, status = ?, priority = ?, due_at = ?, assignee_id = ?, closed_at = ?,
 		    updated_at = ?, version = version + 1
 		WHERE id = ? AND version = ?`
 
 	res, err := r.db.Q(ctx).ExecContext(ctx, q,
-		t.Title, t.Description, t.Status, t.AssigneeID, t.ClosedAt, t.UpdatedAt,
+		t.Title, t.Description, t.Status, t.Priority, t.DueAt, t.AssigneeID, t.ClosedAt, t.UpdatedAt,
 		t.ID, expectedVersion,
 	)
 	if err != nil {

@@ -79,6 +79,9 @@ func (s *store) addTask(t domain.Task) *domain.Task {
 	if cp.Status == "" {
 		cp.Status = domain.TaskStatusTodo
 	}
+	if cp.Priority == "" {
+		cp.Priority = domain.PriorityMedium
+	}
 	s.tasks[cp.ID] = &cp
 	return &cp
 }
@@ -283,6 +286,8 @@ func (r taskRepo) matching(q *domain.TaskListQuery) []*domain.Task {
 	for _, t := range r.s.tasks {
 		if t.TeamID != q.TeamID ||
 			(q.Status != "" && t.Status != q.Status) ||
+			(q.Priority != "" && t.Priority != q.Priority) ||
+			(q.Overdue && !t.IsOverdue(time.Now())) ||
 			(q.AssigneeID != "" && !t.IsAssignee(q.AssigneeID)) {
 			continue
 		}
