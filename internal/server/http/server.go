@@ -9,6 +9,8 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/ramisoul84/task-management/internal/config"
 	"github.com/ramisoul84/task-management/internal/server/http/handler"
+	"github.com/ramisoul84/task-management/internal/server/http/middleware"
+	"github.com/ramisoul84/task-management/pkg/auth"
 	"github.com/ramisoul84/task-management/pkg/cache"
 	"github.com/ramisoul84/task-management/pkg/database"
 	"github.com/ramisoul84/task-management/pkg/logger"
@@ -18,6 +20,7 @@ type Server struct {
 	app   *fiber.App
 	db    *database.DB
 	cache *cache.Cache
+	token auth.TokenService
 	cfg   *config.Config
 	log   *logger.Logger
 }
@@ -27,7 +30,9 @@ func NewServer(
 	log *logger.Logger,
 	db *database.DB,
 	cache *cache.Cache,
+	token auth.TokenService,
 	authHandler *handler.AuthHandler,
+	teamHandler *handler.TeamHandler,
 ) *Server {
 	app := fiber.New(fiber.Config{
 		AppName:               cfg.App.Name,
@@ -42,16 +47,17 @@ func NewServer(
 		app:   app,
 		db:    db,
 		cache: cache,
+		token: token,
 		cfg:   cfg,
 		log:   log,
 	}
 
-	server.registerRoutes(authHandler)
+	server.registerRoutes(authHandler, teamHandler)
 
 	return server
 }
 
-func (s *Server) registerRoutes(authHandler *handler.AuthHandler) {
+func (s *Server) registerRoutes(authHandler *handler.AuthHandler, teamHandler *handler.TeamHandler) {
 	s.app.Use(cors.New(cors.Config{
 		AllowOrigins: s.cfg.HTTP.AllowedOrigins,
 	}))
@@ -60,12 +66,18 @@ func (s *Server) registerRoutes(authHandler *handler.AuthHandler) {
 
 	api := s.app.Group("/api/v1")
 
-	auth := api.Group("/auth")
-
+	auth := api.Group("")
 	auth.Post("/register", authHandler.Register)
 	auth.Post("/login", authHandler.Login)
 	auth.Post("/refresh", authHandler.Refresh)
 	auth.Post("/logout", authHandler.Logout)
+
+	teams := api.Group("/teams", middleware.Auth(s.token))
+	teams.Post("", teamHandler.Create)
+	teams.Get("", teamHandler.List)
+	teams.Post("/:id/invite", teamHandler.Invite)
+	teams.Patch("/:id/members/:userID/role", teamHandler.ChangeMemberRole)
+	teams.Delete("/:id/members/:userID", teamHandler.RemoveMember)
 }
 
 func (s *Server) health(c *fiber.Ctx) error {

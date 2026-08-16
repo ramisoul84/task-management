@@ -50,6 +50,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Repositories
 	userRepo := repository.NewUserRepository(db, log)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(redisCache, log, cfg.Security.RefreshTokenTTL)
+	teamRepo := repository.NewTeamRepository(db, log)
 
 	// Services
 	authService := service.NewAuthService(
@@ -61,8 +62,18 @@ func New(cfg *config.Config) (*App, error) {
 		cfg.Security.AccessTokenTTL,
 	)
 
+	rbacService := service.NewRBACService(teamRepo, log)
+
+	teamService := service.NewTeamService(
+		teamRepo,
+		userRepo,
+		rbacService,
+		log,
+	)
+
 	// Handlers
 	authHandler := handler.NewAuthHandler(authService, requestValidator, cfg.Security)
+	teamHandler := handler.NewTeamHandler(teamService, requestValidator)
 
 	// HTTP server
 	server := http.NewServer(
@@ -70,7 +81,9 @@ func New(cfg *config.Config) (*App, error) {
 		log,
 		db,
 		redisCache,
+		token,
 		authHandler,
+		teamHandler,
 	)
 
 	return &App{
