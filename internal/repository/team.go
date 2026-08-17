@@ -16,8 +16,8 @@ type TeamRepository interface {
 	ListTeamsByUser(ctx context.Context, userID string) ([]*domain.Team, error)
 	AddMember(ctx context.Context, member *domain.TeamMember) error
 	GetUserRoleInTeam(ctx context.Context, userID string, teamID string) (domain.Role, error)
-	UpdateMemberRole(ctx context.Context, teamID string, userID string, role domain.Role) error
-	RemoveMember(ctx context.Context, teamID string, userID string) error
+	UpdateMemberRole(ctx context.Context, teamID string, actorID string, userID string, role domain.Role) error
+	RemoveMember(ctx context.Context, teamID string, actorID string, userID string) error
 	IsTeamMember(ctx context.Context, teamID string, userID string) (bool, error)
 }
 
@@ -206,48 +206,61 @@ func (r *teamRepo) IsTeamMember(ctx context.Context, teamID string, userID strin
 	return exists, nil
 }
 
-func (r *teamRepo) RemoveMember(ctx context.Context, teamID string, userID string) error {
+func (r *teamRepo) RemoveMember(ctx context.Context, teamID string, actorID string, userID string) error {
+	const op = "teamRepo.RemoveMember"
+
 	const query = `
-		DELETE FROM team_members
-		WHERE team_id = ?
-		  AND user_id = ?
+		DELETE target
+		FROM team_members AS target
+		INNER JOIN team_members AS actor
+			ON actor.team_id = target.team_id
+		   AND actor.user_id = ?
+		   AND actor.role IN ('owner', 'admin')
+		WHERE target.team_id = ?
+		  AND target.user_id = ?
 	`
 
 	result, err := r.db.ExecContext(
 		ctx,
 		query,
+		actorID,
 		teamID,
 		userID,
 	)
 	if err != nil {
-		return fmt.Errorf("remove team member: %w", err)
+		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("get affected rows: %w", err)
+		return fmt.Errorf("%s: rows affected: %w", op, err)
 	}
 
 	if rows == 0 {
-		return domain.ErrNotFound
+		return domain.ErrForbidden
 	}
 
 	return nil
 }
 
-func (r *teamRepo) UpdateMemberRole(ctx context.Context, teamID string, userID string, role domain.Role) error {
+func (r *teamRepo) UpdateMemberRole(ctx context.Context, teamID string, actorID string, userID string, role domain.Role) error {
 	const op = "teamRepo.UpdateMemberRole"
 
 	const query = `
-		UPDATE team_members
-		SET role = ?
-		WHERE team_id = ?
-		  AND user_id = ?
+		UPDATE team_members AS target
+		INNER JOIN team_members AS actor
+			ON actor.team_id = target.team_id
+		   AND actor.user_id = ?
+		   AND actor.role IN ('owner', 'admin')
+		SET target.role = ?
+		WHERE target.team_id = ?
+		  AND target.user_id = ?
 	`
 
 	result, err := r.db.ExecContext(
 		ctx,
 		query,
+		actorID,
 		role,
 		teamID,
 		userID,
@@ -262,7 +275,7 @@ func (r *teamRepo) UpdateMemberRole(ctx context.Context, teamID string, userID s
 	}
 
 	if rows == 0 {
-		return domain.ErrNotFound
+		return domain.ErrForbidden
 	}
 
 	return nil

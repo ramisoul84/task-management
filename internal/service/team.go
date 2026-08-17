@@ -176,7 +176,8 @@ func (s *teamService) ChangeMemberRole(ctx context.Context, actorID string, team
 	const op = "team.ChangeMemberRole"
 
 	if actorID == "" || teamID == "" || targetUserID == "" {
-		return domain.ErrInvalidInput
+		return fmt.Errorf("%s: actor, team and target user IDs are required: %w",
+			op, domain.ErrInvalidInput)
 	}
 
 	if err := s.rbacSvc.CanChangeMemberRole(
@@ -192,10 +193,16 @@ func (s *teamService) ChangeMemberRole(ctx context.Context, actorID string, team
 	if err := s.teamRepo.UpdateMemberRole(
 		ctx,
 		teamID,
+		actorID,
 		targetUserID,
 		role,
 	); err != nil {
-		return fmt.Errorf("update member role: %w", err)
+		s.log.Error().
+			Err(err).
+			Str("team_id", teamID).
+			Str("target_user_id", targetUserID).
+			Msg("update member role")
+		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	return nil
@@ -207,11 +214,11 @@ func (s *teamService) RemoveMember(
 	teamID string,
 	targetUserID string,
 ) error {
-
 	const op = "team.RemoveMember"
 
 	if actorID == "" || teamID == "" || targetUserID == "" {
-		return domain.ErrInvalidInput
+		return fmt.Errorf("%s: actor, team and target user IDs are required: %w",
+			op, domain.ErrInvalidInput)
 	}
 
 	if err := s.rbacSvc.CanRemoveMember(
@@ -226,9 +233,15 @@ func (s *teamService) RemoveMember(
 	if err := s.teamRepo.RemoveMember(
 		ctx,
 		teamID,
+		actorID,
 		targetUserID,
 	); err != nil {
-		return fmt.Errorf("remove team member: %w", err)
+		s.log.Error().
+			Err(err).
+			Str("team_id", teamID).
+			Str("target_user_id", targetUserID).
+			Msg("remove member")
+		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	return nil
