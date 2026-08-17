@@ -15,7 +15,7 @@ import (
 func main() {
 	cfg := config.Load(os.Getenv("APP_ENV"))
 
-	if err := migrator.Run(cfg.DB, "./migrations"); err != nil {
+	if err := migrator.Run(cfg.DB, cfg.App.MigrationsDir); err != nil {
 		log.Fatalf("migration: %v", err)
 	}
 

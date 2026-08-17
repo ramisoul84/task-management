@@ -7,7 +7,6 @@ import (
 
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/internal/repository"
-	"github.com/ramisoul84/task-management/pkg/logger"
 )
 
 type RBACService interface {
@@ -18,39 +17,19 @@ type RBACService interface {
 
 type rbacService struct {
 	teamRepo repository.TeamRepository
-	log      *logger.Logger
 }
 
-func NewRBACService(
-	teamRepo repository.TeamRepository,
-	log *logger.Logger,
-) RBACService {
-	return &rbacService{
-		teamRepo: teamRepo,
-		log:      log,
-	}
+func NewRBACService(teamRepo repository.TeamRepository) RBACService {
+	return &rbacService{teamRepo: teamRepo}
 }
 
-func (s *rbacService) CanInviteMember(
-	ctx context.Context,
-	teamID string,
-	actorID string,
-) error {
-	role, err := s.teamRepo.GetUserRoleInTeam(
-		ctx,
-		teamID,
-		actorID,
-	)
+func (s *rbacService) CanInviteMember(ctx context.Context, teamID string, actorID string) error {
+	role, err := s.getRole(ctx, teamID, actorID)
 	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ErrForbidden
-		}
-
-		return fmt.Errorf("get actor role: %w", err)
+		return err
 	}
 
-	if role != domain.RoleOwner &&
-		role != domain.RoleAdmin {
+	if !isOwnerOrAdmin(role) {
 		return domain.ErrForbidden
 	}
 
@@ -69,28 +48,19 @@ func (s *rbacService) CanChangeMemberRole(
 		return domain.ErrInvalidInput
 	}
 
-	actorRole, err := s.teamRepo.GetUserRoleInTeam(
-		ctx,
-		teamID,
-		actorID,
-	)
+	actorRole, err := s.getRole(ctx, teamID, actorID)
 	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ErrForbidden
-		}
-
-		return fmt.Errorf("get actor role: %w", err)
+		return err
 	}
 
-	if actorRole != domain.RoleOwner &&
-		actorRole != domain.RoleAdmin {
+	if !isOwnerOrAdmin(actorRole) {
 		return domain.ErrForbidden
 	}
 
 	targetRole, err := s.teamRepo.GetUserRoleInTeam(
 		ctx,
-		teamID,
 		targetUserID,
+		teamID,
 	)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -105,7 +75,7 @@ func (s *rbacService) CanChangeMemberRole(
 		return domain.ErrForbidden
 	}
 
-	// Admin cannot modify another admin.
+	// Admin cannot modify another admin (or itself through this path).
 	if actorRole == domain.RoleAdmin &&
 		targetRole == domain.RoleAdmin {
 		return domain.ErrForbidden
@@ -120,28 +90,19 @@ func (s *rbacService) CanRemoveMember(
 	actorID string,
 	targetUserID string,
 ) error {
-	actorRole, err := s.teamRepo.GetUserRoleInTeam(
-		ctx,
-		teamID,
-		actorID,
-	)
+	actorRole, err := s.getRole(ctx, teamID, actorID)
 	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ErrForbidden
-		}
-
-		return fmt.Errorf("get actor role: %w", err)
+		return err
 	}
 
-	if actorRole != domain.RoleOwner &&
-		actorRole != domain.RoleAdmin {
+	if !isOwnerOrAdmin(actorRole) {
 		return domain.ErrForbidden
 	}
 
 	targetRole, err := s.teamRepo.GetUserRoleInTeam(
 		ctx,
-		teamID,
 		targetUserID,
+		teamID,
 	)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -163,4 +124,26 @@ func (s *rbacService) CanRemoveMember(
 	}
 
 	return nil
+}
+
+// Helper functions
+func (s *rbacService) getRole(ctx context.Context, teamID string, actorID string) (domain.Role, error) {
+	role, err := s.teamRepo.GetUserRoleInTeam(
+		ctx,
+		actorID,
+		teamID,
+	)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return "", domain.ErrForbidden
+		}
+
+		return "", fmt.Errorf("get actor role: %w", err)
+	}
+
+	return role, nil
+}
+
+func isOwnerOrAdmin(role domain.Role) bool {
+	return role == domain.RoleOwner || role == domain.RoleAdmin
 }

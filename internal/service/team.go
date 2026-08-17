@@ -48,20 +48,8 @@ func (s *teamService) CreateTeam(ctx context.Context, ownerID, teamName string) 
 
 	teamName = strings.ToUpper(strings.TrimSpace(teamName))
 
-	if ownerID == "" {
-		return nil, fmt.Errorf(
-			"%s: user ID is required: %w",
-			op,
-			domain.ErrInvalidInput,
-		)
-	}
-
-	if teamName == "" {
-		return nil, fmt.Errorf(
-			"%s: team name is required: %w",
-			op,
-			domain.ErrInvalidInput,
-		)
+	if ownerID == "" || teamName == "" {
+		return nil, domain.ErrInvalidInput
 	}
 
 	team := &domain.Team{
@@ -93,11 +81,7 @@ func (s *teamService) ListTeams(ctx context.Context, userID string) ([]*domain.T
 	const op = "team.ListTeams"
 
 	if userID == "" {
-		return nil, fmt.Errorf(
-			"%s: user ID is required: %w",
-			op,
-			domain.ErrInvalidInput,
-		)
+		return nil, domain.ErrInvalidInput
 	}
 
 	teams, err := s.teamRepo.ListTeamsByUser(ctx, userID)
@@ -121,19 +105,8 @@ func (s *teamService) InviteMember(
 ) error {
 	const op = "team.InviteMember"
 
-	if actorID == "" {
-		return fmt.Errorf("%s: actor ID is required: %w",
-			op, domain.ErrInvalidInput)
-	}
-
-	if teamID == "" {
-		return fmt.Errorf("%s: team ID is required: %w",
-			op, domain.ErrInvalidInput)
-	}
-
-	if userID == "" {
-		return fmt.Errorf("%s: user ID is required: %w",
-			op, domain.ErrInvalidInput)
+	if actorID == "" || teamID == "" || userID == "" {
+		return domain.ErrInvalidInput
 	}
 
 	if actorID == userID {
@@ -155,6 +128,11 @@ func (s *teamService) InviteMember(
 			return domain.ErrNotFound
 		}
 
+		s.log.Error().
+			Err(err).
+			Str("team_id", teamID).
+			Str("user_id", userID).
+			Msg("invite: get user")
 		return fmt.Errorf("%s: get user: %w", op, err)
 	}
 
@@ -164,6 +142,11 @@ func (s *teamService) InviteMember(
 		userID,
 	)
 	if err != nil {
+		s.log.Error().
+			Err(err).
+			Str("team_id", teamID).
+			Str("user_id", userID).
+			Msg("invite: check membership")
 		return fmt.Errorf("%s: check membership: %w", op, err)
 	}
 
@@ -178,6 +161,11 @@ func (s *teamService) InviteMember(
 	}
 
 	if err := s.teamRepo.AddMember(ctx, member); err != nil {
+		s.log.Error().
+			Err(err).
+			Str("team_id", teamID).
+			Str("user_id", userID).
+			Msg("invite: add member")
 		return fmt.Errorf("%s: add member: %w", op, err)
 	}
 
@@ -185,6 +173,12 @@ func (s *teamService) InviteMember(
 }
 
 func (s *teamService) ChangeMemberRole(ctx context.Context, actorID string, teamID string, targetUserID string, role domain.Role) error {
+	const op = "team.ChangeMemberRole"
+
+	if actorID == "" || teamID == "" || targetUserID == "" {
+		return domain.ErrInvalidInput
+	}
+
 	if err := s.rbacSvc.CanChangeMemberRole(
 		ctx,
 		teamID,
@@ -213,6 +207,13 @@ func (s *teamService) RemoveMember(
 	teamID string,
 	targetUserID string,
 ) error {
+
+	const op = "team.RemoveMember"
+
+	if actorID == "" || teamID == "" || targetUserID == "" {
+		return domain.ErrInvalidInput
+	}
+
 	if err := s.rbacSvc.CanRemoveMember(
 		ctx,
 		teamID,

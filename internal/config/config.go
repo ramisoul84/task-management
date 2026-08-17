@@ -12,9 +12,10 @@ type Config struct {
 }
 
 type AppConfig struct {
-	Env     string
-	Name    string
-	Version string
+	Env           string
+	Name          string
+	Version       string
+	MigrationsDir string
 }
 
 type LoggingConfig struct {
@@ -72,9 +73,10 @@ func Load(env string) *Config {
 
 	cfg := &Config{
 		App: AppConfig{
-			Env:     getEnv("APP_ENV", "development"),
-			Name:    getEnv("APP_NAME", "task-management"),
-			Version: getEnv("APP_VERSION", "1.0.0"),
+			Env:           getEnv("APP_ENV", "development"),
+			Name:          getEnv("APP_NAME", "task-management"),
+			Version:       getEnv("APP_VERSION", "1.0.0"),
+			MigrationsDir: getEnv("MIGRATIONS_DIR", "./migrations"),
 		},
 
 		Logging: LoggingConfig{

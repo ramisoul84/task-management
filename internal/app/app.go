@@ -48,9 +48,9 @@ func New(cfg *config.Config) (*App, error) {
 	requestValidator := validator.New()
 
 	// Repositories
-	userRepo := repository.NewUserRepository(db, log)
-	refreshTokenRepo := repository.NewRefreshTokenRepository(redisCache, log, cfg.Security.RefreshTokenTTL)
-	teamRepo := repository.NewTeamRepository(db, log)
+	userRepo := repository.NewUserRepository(db)
+	refreshTokenRepo := repository.NewRefreshTokenRepository(redisCache, cfg.Security.RefreshTokenTTL)
+	teamRepo := repository.NewTeamRepository(db)
 
 	// Services
 	authService := service.NewAuthService(
@@ -62,7 +62,7 @@ func New(cfg *config.Config) (*App, error) {
 		cfg.Security.AccessTokenTTL,
 	)
 
-	rbacService := service.NewRBACService(teamRepo, log)
+	rbacService := service.NewRBACService(teamRepo)
 
 	teamService := service.NewTeamService(
 		teamRepo,

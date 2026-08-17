@@ -53,19 +53,8 @@ func (s *authSvc) Register(ctx context.Context, email, password, name string) (*
 	email = normalizeEmail(email)
 	name = capitalizeFirst(name)
 
-	if email == "" {
-		s.log.Warn().Msg("email is required")
-		return nil, errors.New("email is required")
-	}
-
-	if password == "" {
-		s.log.Warn().Msg("password is required")
-		return nil, errors.New("password is required")
-	}
-
-	if name == "" {
-		s.log.Warn().Msg("name is required")
-		return nil, errors.New("name is required")
+	if email == "" || password == "" || name == "" {
+		return nil, domain.ErrInvalidInput
 	}
 
 	passwordHash, err := s.hasher.Hash(password)
@@ -82,11 +71,17 @@ func (s *authSvc) Register(ctx context.Context, email, password, name string) (*
 	}
 
 	if err := s.userRepo.Create(ctx, user); err != nil {
+		if errors.Is(err, domain.ErrAlreadyExists) {
+			return nil, domain.ErrAlreadyExists
+		}
+
 		s.log.Error().Err(err).Msg("create user")
 		return nil, fmt.Errorf("create user: %w", err)
 	}
 
-	s.log.Info().Interface("user", user).Msg("user registered")
+	s.log.Info().
+		Str("user_id", user.ID).
+		Msg("user registered")
 	return user, nil
 }
 
@@ -143,7 +138,6 @@ func (s *authSvc) Refresh(ctx context.Context, refreshToken string) (*domain.Tok
 	refreshToken = strings.TrimSpace(refreshToken)
 
 	if refreshToken == "" {
-		s.log.Warn().Msg("refresh token is required")
 		return nil, domain.ErrInvalidCredentials
 	}
 
@@ -189,6 +183,11 @@ func (s *authSvc) Refresh(ctx context.Context, refreshToken string) (*domain.Tok
 	newHash := s.token.HashRefreshToken(newRefreshToken)
 
 	if err := s.refreshTokenRepo.Rotate(ctx, oldHash, newHash, user.ID); err != nil {
+		if errors.Is(err, domain.ErrInvalidCredentials) {
+			s.log.Warn().Msg("refresh token reuse detected")
+			return nil, domain.ErrInvalidCredentials
+		}
+
 		s.log.Error().Err(err).Msg("rotate refresh token")
 		return nil, fmt.Errorf("rotate refresh token: %w", err)
 	}
@@ -210,6 +209,7 @@ func (s *authSvc) Logout(ctx context.Context, refreshToken string) error {
 	hash := s.token.HashRefreshToken(refreshToken)
 
 	if err := s.refreshTokenRepo.Delete(ctx, hash); err != nil {
+		s.log.Error().Err(err).Msg("delete refresh token")
 		return fmt.Errorf("delete refresh token: %w", err)
 	}
 

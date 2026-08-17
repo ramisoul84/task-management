@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/ramisoul84/task-management/internal/domain"
 	"github.com/ramisoul84/task-management/pkg/database"
-	"github.com/ramisoul84/task-management/pkg/logger"
 )
 
 type TeamRepository interface {
@@ -22,18 +22,11 @@ type TeamRepository interface {
 }
 
 type teamRepo struct {
-	db  *database.DB
-	log *logger.Logger
+	db *database.DB
 }
 
-func NewTeamRepository(
-	db *database.DB,
-	log *logger.Logger,
-) TeamRepository {
-	return &teamRepo{
-		db:  db,
-		log: log,
-	}
+func NewTeamRepository(db *database.DB) TeamRepository {
+	return &teamRepo{db: db}
 }
 
 func (r *teamRepo) CreateWithOwner(ctx context.Context, team *domain.Team) error {
@@ -144,6 +137,12 @@ func (r *teamRepo) AddMember(ctx context.Context, member *domain.TeamMember) err
 		member.UserID,
 		member.Role,
 	); err != nil {
+		var mysqlErr *mysql.MySQLError
+
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return domain.ErrAlreadyExists
+		}
+
 		return fmt.Errorf("%s: %w", op, err)
 	}
 

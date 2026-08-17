@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/ramisoul84/task-management/internal/config"
 	"github.com/ramisoul84/task-management/internal/server/http/handler"
 	"github.com/ramisoul84/task-management/internal/server/http/middleware"
@@ -58,15 +57,13 @@ func NewServer(
 }
 
 func (s *Server) registerRoutes(authHandler *handler.AuthHandler, teamHandler *handler.TeamHandler) {
-	s.app.Use(cors.New(cors.Config{
-		AllowOrigins: s.cfg.HTTP.AllowedOrigins,
-	}))
+	s.app.Use(middleware.NewCORSMiddleware(s.cfg.HTTP.AllowedOrigins))
 
 	s.app.Get("/health", s.health)
 
 	api := s.app.Group("/api/v1")
 
-	auth := api.Group("")
+	auth := api.Group("/auth")
 	auth.Post("/register", authHandler.Register)
 	auth.Post("/login", authHandler.Login)
 	auth.Post("/refresh", authHandler.Refresh)
