@@ -1,4 +1,4 @@
-.PHONY: run prod build test
+.PHONY: run prod build test race cover
 
 run:
 	go run cmd/task-management/main.go
@@ -11,3 +11,9 @@ build:
 
 test:
 	go test -v ./...
+
+race:
+	go test -race ./internal/service/
+
+cover:
+	go test ./internal/service/ -cover

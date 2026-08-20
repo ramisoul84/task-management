@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ramisoul84/task-management/internal/domain"
+	"github.com/ramisoul84/task-management/pkg/auth"
 )
 
 // fakeTeamRepo is a hand-rolled in-memory repository.
@@ -105,18 +106,29 @@ func (f *fakeTeamRepo) IsTeamMember(_ context.Context, _ string, _ string) (bool
 }
 
 // fakeUserRepo is a minimal in-memory user repository.
-// A user missing from users behaves like "unknown user" (ErrNotFound).
+// users maps a user ID to the user, emails maps an email to the user.
+// A missing key behaves like "unknown user" (ErrNotFound).
 type fakeUserRepo struct {
-	users map[string]*domain.User
-	err   error
+	users  map[string]*domain.User
+	emails map[string]*domain.User
+	err    error
 }
 
 func (f *fakeUserRepo) Create(context.Context, *domain.User) error {
-	return nil
+	return f.err
 }
 
-func (f *fakeUserRepo) GetByEmail(context.Context, string) (*domain.User, error) {
-	return nil, domain.ErrNotFound
+func (f *fakeUserRepo) GetByEmail(_ context.Context, email string) (*domain.User, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	user, ok := f.emails[email]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+
+	return user, nil
 }
 
 func (f *fakeUserRepo) GetByID(_ context.Context, userID string) (*domain.User, error) {
@@ -157,4 +169,119 @@ func (f *fakeRBAC) CanChangeMemberRole(context.Context, string, string, string, 
 func (f *fakeRBAC) CanRemoveMember(context.Context, string, string, string) error {
 	f.removeCalls++
 	return f.removeErr
+}
+
+// fakeRefreshTokenRepo is an in-memory refresh token repository.
+// tokens maps a token hash to the user ID that owns it.
+type fakeRefreshTokenRepo struct {
+	tokens      map[string]string
+	err         error
+	rotateErr   error
+	deleteErr   error
+	rotates     []rotateCall
+	deleteCalls []string
+}
+
+type rotateCall struct {
+	oldHash string
+	newHash string
+	userID  string
+}
+
+func (f *fakeRefreshTokenRepo) Set(_ context.Context, hash, userID string) error {
+	if f.err != nil {
+		return f.err
+	}
+
+	f.tokens[hash] = userID
+	return nil
+}
+
+func (f *fakeRefreshTokenRepo) Get(_ context.Context, hash string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+
+	userID, ok := f.tokens[hash]
+	if !ok {
+		return "", domain.ErrNotFound
+	}
+
+	return userID, nil
+}
+
+func (f *fakeRefreshTokenRepo) Rotate(_ context.Context, oldHash, newHash, userID string) error {
+	f.rotates = append(f.rotates, rotateCall{
+		oldHash: oldHash,
+		newHash: newHash,
+		userID:  userID,
+	})
+
+	if f.rotateErr != nil {
+		return f.rotateErr
+	}
+
+	f.tokens[newHash] = userID
+	delete(f.tokens, oldHash)
+	return nil
+}
+
+func (f *fakeRefreshTokenRepo) Delete(_ context.Context, hash string) error {
+	f.deleteCalls = append(f.deleteCalls, hash)
+
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+
+	delete(f.tokens, hash)
+	return nil
+}
+
+// fakeTokenService implements pkg/auth.TokenService with canned outputs.
+type fakeTokenService struct {
+	accessToken  string
+	accessErr    error
+	refreshToken string
+	refreshErr   error
+
+	lastAccessUserID string
+	lastAccessEmail  string
+}
+
+func (f *fakeTokenService) GenerateAccessToken(userID, email string) (string, error) {
+	f.lastAccessUserID = userID
+	f.lastAccessEmail = email
+	return f.accessToken, f.accessErr
+}
+
+func (f *fakeTokenService) GenerateRefreshToken() (string, error) {
+	return f.refreshToken, f.refreshErr
+}
+
+func (f *fakeTokenService) HashRefreshToken(token string) string {
+	return "hash-" + token
+}
+
+func (f *fakeTokenService) ValidateAccessToken(string) (*auth.TokenClaims, error) {
+	return nil, nil
+}
+
+// fakeHasher implements pkg/auth.Hasher with canned outputs.
+type fakeHasher struct {
+	hashOut    string
+	hashErr    error
+	compareErr error
+
+	hashCalls    int
+	compareCalls int
+}
+
+func (f *fakeHasher) Hash(string) (string, error) {
+	f.hashCalls++
+	return f.hashOut, f.hashErr
+}
+
+func (f *fakeHasher) Compare(string, string) error {
+	f.compareCalls++
+	return f.compareErr
 }
