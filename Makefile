@@ -1,4 +1,4 @@
-.PHONY: run prod build test race cover
+.PHONY: run prod build test race cover test-db integration
 
 run:
 	go run cmd/task-management/main.go
@@ -17,3 +17,9 @@ race:
 
 cover:
 	go test ./internal/service/ -cover
+
+test-db:
+	docker compose -f docker-compose.test.yml up -d --wait
+
+integration: test-db
+	go test -tags integration -race ./internal/test/... -count=1 -v
