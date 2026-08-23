@@ -82,6 +82,10 @@ func (s *store) addTask(t domain.Task) *domain.Task {
 	if cp.Priority == "" {
 		cp.Priority = domain.PriorityMedium
 	}
+	if cp.CreatedAt.IsZero() {
+		cp.CreatedAt = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+		cp.UpdatedAt = cp.CreatedAt
+	}
 	s.tasks[cp.ID] = &cp
 	return &cp
 }
@@ -298,17 +302,29 @@ func (r taskRepo) matching(q *domain.TaskListQuery) []*domain.Task {
 	return out
 }
 
-func (r taskRepo) List(_ context.Context, q *domain.TaskListQuery) ([]*domain.Task, error) {
+// List orders by id descending (fixtures use ordered IDs) and treats the
+// cursor ID as the keyset position.
+func (r taskRepo) List(_ context.Context, q *domain.TaskListQuery, after *domain.TaskCursor) ([]*domain.Task, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	if err := r.s.fail(); err != nil {
 		return nil, err
 	}
 	all := r.matching(q)
-	if q.Offset >= len(all) {
+	start := q.Offset
+	if after != nil {
+		start = len(all)
+		for i, t := range all {
+			if t.ID < after.ID {
+				start = i
+				break
+			}
+		}
+	}
+	if start >= len(all) {
 		return []*domain.Task{}, nil
 	}
-	return all[q.Offset:min(q.Offset+q.Limit, len(all))], nil
+	return all[start:min(start+q.Limit, len(all))], nil
 }
 
 func (r taskRepo) Count(_ context.Context, q *domain.TaskListQuery) (int, error) {

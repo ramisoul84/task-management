@@ -129,6 +129,18 @@ func (s *taskService) ListTasks(ctx context.Context, userID string, q *domain.Ta
 
 	normalizePage(q)
 
+	var after *domain.TaskCursor
+	if q.Cursor != "" {
+		if !domain.SupportsCursor(q.Sort) {
+			return nil, domain.ErrInvalidInput.WithMessage("cursor pagination supports sort=created_at or sort=updated_at only")
+		}
+		c, err := domain.DecodeTaskCursor(q.Cursor, q.Sort, q.Order)
+		if err != nil {
+			return nil, err
+		}
+		after = &c
+	}
+
 	// A cache failure is not a request failure: fall through to MySQL.
 	cached, stamp, err := s.cache.Get(ctx, q)
 	if err != nil {
@@ -138,7 +150,11 @@ func (s *taskService) ListTasks(ctx context.Context, userID string, q *domain.Ta
 		return cached, nil
 	}
 
-	tasks, err := s.tasks.List(ctx, q)
+	// Fetch one extra row: it tells us whether another page exists
+	// without relying on the (separately computed) total.
+	fetch := *q
+	fetch.Limit++
+	tasks, err := s.tasks.List(ctx, &fetch, after)
 	if err != nil {
 		return nil, err
 	}
@@ -147,12 +163,20 @@ func (s *taskService) ListTasks(ctx context.Context, userID string, q *domain.Ta
 		return nil, err
 	}
 
+	hasMore := len(tasks) > q.Limit
+	if hasMore {
+		tasks = tasks[:q.Limit]
+	}
+
 	resp := &domain.TaskListResponse{
 		Tasks:   tasks,
 		Total:   total,
 		Limit:   q.Limit,
 		Offset:  q.Offset,
-		HasMore: q.Offset+len(tasks) < total,
+		HasMore: hasMore,
+	}
+	if hasMore && domain.SupportsCursor(q.Sort) {
+		resp.NextCursor = domain.CursorAfter(tasks[len(tasks)-1], q.Sort, q.Order).Encode()
 	}
 
 	if err := s.cache.Set(ctx, q, stamp, resp); err != nil {

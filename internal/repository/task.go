@@ -18,7 +18,9 @@ type TaskRepository interface {
 	// ends, so concurrent updates are serialised and history is always
 	// computed from the latest committed state.
 	GetByIDForUpdate(ctx context.Context, id string) (*domain.Task, error)
-	List(ctx context.Context, q *domain.TaskListQuery) ([]*domain.Task, error)
+	// List returns up to q.Limit tasks. With a non-nil after cursor it
+	// uses keyset pagination and ignores q.Offset.
+	List(ctx context.Context, q *domain.TaskListQuery, after *domain.TaskCursor) ([]*domain.Task, error)
 	Count(ctx context.Context, q *domain.TaskListQuery) (int, error)
 	// Update persists the mutable fields of task if its stored version is
 	// still expectedVersion, and bumps the version. Returns
@@ -144,11 +146,27 @@ func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
-func (r *taskRepo) List(ctx context.Context, q *domain.TaskListQuery) ([]*domain.Task, error) {
+func (r *taskRepo) List(ctx context.Context, q *domain.TaskListQuery, after *domain.TaskCursor) ([]*domain.Task, error) {
 	where, args := filter(q)
 
+	offset := q.Offset
+	if after != nil {
+		// Keyset predicate on the same (column, id) pair the ORDER BY uses,
+		// so it is served by the (team_id, ..., created_at, id) indexes.
+		col, cmp := "created_at", "<"
+		if after.Sort == domain.SortUpdatedAt {
+			col = "updated_at"
+		}
+		if after.Order == "asc" {
+			cmp = ">"
+		}
+		where += " AND (" + col + " " + cmp + " ? OR (" + col + " = ? AND id " + cmp + " ?))"
+		args = append(args, after.Time, after.Time, after.ID)
+		offset = 0
+	}
+
 	query := `SELECT ` + taskColumns + ` FROM tasks` + where + orderBy(q) + ` LIMIT ? OFFSET ?`
-	args = append(args, q.Limit, q.Offset)
+	args = append(args, q.Limit, offset)
 
 	tasks := make([]*domain.Task, 0, q.Limit)
 	if err := r.db.Q(ctx).SelectContext(ctx, &tasks, query, args...); err != nil {
