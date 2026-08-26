@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +154,62 @@ func TestListTasks(t *testing.T) {
 			t.Fatalf("limit = %d, want %d", res.Limit, service.MaxPageSize)
 		}
 	})
+}
+
+func TestListTasks_CursorPagination(t *testing.T) {
+	ctx := context.Background()
+	f := newTaskFixture(t)
+	for _, id := range []string{"task-2", "task-3", "task-4", "task-5"} {
+		f.s.addTask(domain.Task{ID: id, TeamID: teamA, CreatedBy: "owner"})
+	}
+
+	var (
+		seen   []string
+		cursor string
+		pages  int
+	)
+	for {
+		res, err := f.svc.ListTasks(ctx, "owner", &domain.TaskListQuery{TeamID: teamA, Limit: 2, Cursor: cursor})
+		wantErr(t, err, nil)
+		pages++
+		for _, task := range res.Tasks {
+			seen = append(seen, task.ID)
+		}
+		if res.Total != 5 {
+			t.Fatalf("total = %d, want 5", res.Total)
+		}
+		if !res.HasMore {
+			if res.NextCursor != "" {
+				t.Fatal("last page must not carry a next_cursor")
+			}
+			break
+		}
+		if res.NextCursor == "" {
+			t.Fatal("has_more page must carry a next_cursor")
+		}
+		cursor = res.NextCursor
+	}
+
+	want := []string{"task-5", "task-4", "task-3", "task-2", "task-1"}
+	if pages != 3 || strings.Join(seen, ",") != strings.Join(want, ",") {
+		t.Fatalf("pages=%d seen=%v, want 3 pages of %v", pages, seen, want)
+	}
+}
+
+func TestListTasks_CursorValidation(t *testing.T) {
+	ctx := context.Background()
+	f := newTaskFixture(t)
+
+	_, err := f.svc.ListTasks(ctx, "owner", &domain.TaskListQuery{TeamID: teamA, Cursor: "%%%garbage"})
+	wantErr(t, err, domain.ErrInvalidInput)
+
+	_, err = f.svc.ListTasks(ctx, "owner", &domain.TaskListQuery{TeamID: teamA, Sort: domain.SortPriority, Cursor: "x"})
+	wantErr(t, err, domain.ErrInvalidInput)
+
+	// A cursor issued for one ordering cannot be replayed against another.
+	c := domain.CursorAfter(&domain.Task{ID: "task-1", CreatedAt: time.Now()}, "", "").Encode()
+	_, err = f.svc.ListTasks(ctx, "owner", &domain.TaskListQuery{TeamID: teamA, Order: "asc", Cursor: c})
+	wantErr(t, err, domain.ErrInvalidInput)
 }
 
 func TestUpdateTask_Permissions(t *testing.T) {

@@ -96,6 +96,9 @@ type TaskListQuery struct {
 	Order      string       `query:"order" validate:"omitempty,oneof=asc desc" example:"desc"`
 	Limit      int          `query:"limit" validate:"gte=0,lte=100" example:"20"`
 	Offset     int          `query:"offset" validate:"gte=0" example:"0"`
+	// Cursor is the next_cursor of a previous page (keyset pagination).
+	// It cannot be combined with offset.
+	Cursor string `query:"cursor" validate:"omitempty,max=512,excluded_with=Offset" example:""`
 }
 
 // TaskListResponse is a page of tasks.
@@ -105,6 +108,10 @@ type TaskListResponse struct {
 	Limit   int     `json:"limit" example:"20"`
 	Offset  int     `json:"offset" example:"0"`
 	HasMore bool    `json:"has_more" example:"true"`
+	// NextCursor fetches the following page via ?cursor=. Present when
+	// has_more is true and the sort supports keyset pagination
+	// (created_at, updated_at).
+	NextCursor string `json:"next_cursor,omitempty" example:"eyJzIjoiY3JlYXRlZF9hdCIsIm8iOiJkZXNjIiwidCI6IjIwMjQtMDEtMTVUMTA6MzA6MDBaIiwiaSI6IjEyMyJ9"`
 }
 
 // UpdateTaskRequest is the body of PUT /tasks/{id}. Omitted fields are left
