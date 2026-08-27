@@ -37,6 +37,9 @@ type TaskRepository interface {
 	ListHistory(ctx context.Context, taskID string) ([]*domain.TaskHistory, error)
 
 	AddComment(ctx context.Context, c *domain.TaskComment) error
+	GetComment(ctx context.Context, taskID, commentID string) (*domain.TaskComment, error)
+	UpdateComment(ctx context.Context, c *domain.TaskComment) error
+	DeleteComment(ctx context.Context, commentID string) error
 	ListComments(ctx context.Context, taskID string) ([]*domain.TaskComment, error)
 }
 
@@ -277,9 +280,9 @@ func (r *taskRepo) ListHistory(ctx context.Context, taskID string) ([]*domain.Ta
 }
 
 func (r *taskRepo) AddComment(ctx context.Context, c *domain.TaskComment) error {
-	const q = `INSERT INTO task_comments (id, task_id, user_id, content, created_at) VALUES (?, ?, ?, ?, ?)`
+	const q = `INSERT INTO task_comments (id, task_id, user_id, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
 
-	if _, err := r.db.Q(ctx).ExecContext(ctx, q, c.ID, c.TaskID, c.UserID, c.Content, c.CreatedAt); err != nil {
+	if _, err := r.db.Q(ctx).ExecContext(ctx, q, c.ID, c.TaskID, c.UserID, c.Content, c.CreatedAt, c.UpdatedAt); err != nil {
 		if database.IsForeignKeyViolation(err) {
 			return domain.ErrNotFound.WithMessage("task not found")
 		}
@@ -288,12 +291,45 @@ func (r *taskRepo) AddComment(ctx context.Context, c *domain.TaskComment) error 
 	return nil
 }
 
+const commentSelect = `
+	SELECT c.id, c.task_id, c.user_id, u.name AS user_name, c.content, c.created_at, c.updated_at,
+	       c.updated_at > c.created_at AS edited
+	FROM task_comments c
+	JOIN users u ON u.id = c.user_id`
+
+func (r *taskRepo) GetComment(ctx context.Context, taskID, commentID string) (*domain.TaskComment, error) {
+	var c domain.TaskComment
+	err := r.db.Q(ctx).GetContext(ctx, &c, commentSelect+` WHERE c.id = ? AND c.task_id = ?`, commentID, taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, domain.ErrNotFound.WithMessage("comment not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("taskRepo.GetComment: %w", err)
+	}
+	return &c, nil
+}
+
+func (r *taskRepo) UpdateComment(ctx context.Context, c *domain.TaskComment) error {
+	res, err := r.db.Q(ctx).ExecContext(ctx,
+		`UPDATE task_comments SET content = ?, updated_at = ? WHERE id = ?`, c.Content, c.UpdatedAt, c.ID)
+	if err != nil {
+		return fmt.Errorf("taskRepo.UpdateComment: %w", err)
+	}
+	return requireAffected(res, domain.ErrNotFound.WithMessage("comment not found"))
+}
+
+func (r *taskRepo) DeleteComment(ctx context.Context, commentID string) error {
+	res, err := r.db.Q(ctx).ExecContext(ctx, `DELETE FROM task_comments WHERE id = ?`, commentID)
+	if err != nil {
+		return fmt.Errorf("taskRepo.DeleteComment: %w", err)
+	}
+	return requireAffected(res, domain.ErrNotFound.WithMessage("comment not found"))
+}
+
 func (r *taskRepo) ListComments(ctx context.Context, taskID string) ([]*domain.TaskComment, error) {
-	const q = `
-		SELECT id, task_id, user_id, content, created_at
-		FROM task_comments
-		WHERE task_id = ?
-		ORDER BY created_at ASC, id ASC`
+	const q = commentSelect + `
+		WHERE c.task_id = ?
+		ORDER BY c.created_at ASC, c.id ASC`
 
 	comments := make([]*domain.TaskComment, 0)
 	if err := r.db.Q(ctx).SelectContext(ctx, &comments, q, taskID); err != nil {

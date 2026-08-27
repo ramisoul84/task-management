@@ -494,3 +494,56 @@ func TestHistoryAndComments_Visibility(t *testing.T) {
 		wantErr(t, err, domain.ErrNotFound)
 	})
 }
+
+func TestComments_EditAndDelete(t *testing.T) {
+	ctx := context.Background()
+
+	setup := func(t *testing.T) (*taskFixture, string) {
+		f := newTaskFixture(t)
+		c, err := f.svc.AddComment(ctx, "assignee", taskT, &domain.CreateCommentRequest{Content: "first"})
+		wantErr(t, err, nil)
+		return f, c.ID
+	}
+
+	t.Run("author edits", func(t *testing.T) {
+		f, id := setup(t)
+		f.s.comments[0].CreatedAt = f.s.comments[0].CreatedAt.Add(-time.Minute)
+		c, err := f.svc.EditComment(ctx, "assignee", taskT, id, &domain.CreateCommentRequest{Content: " second "})
+		wantErr(t, err, nil)
+		if c.Content != "second" || !c.Edited {
+			t.Fatalf("unexpected comment: %+v", c)
+		}
+	})
+
+	t.Run("nobody else edits, not even the owner", func(t *testing.T) {
+		f, id := setup(t)
+		_, err := f.svc.EditComment(ctx, "owner", taskT, id, &domain.CreateCommentRequest{Content: "censored"})
+		wantErr(t, err, domain.ErrForbidden)
+	})
+
+	t.Run("comment must belong to the task in the URL", func(t *testing.T) {
+		f, id := setup(t)
+		f.s.addTask(domain.Task{ID: "task-2", TeamID: teamA, CreatedBy: "owner"})
+		_, err := f.svc.EditComment(ctx, "assignee", "task-2", id, &domain.CreateCommentRequest{Content: "x"})
+		wantErr(t, err, domain.ErrNotFound)
+	})
+
+	for _, tc := range []struct {
+		user string
+		want error
+	}{
+		{"assignee", nil}, // author
+		{"admin", nil},    // moderation
+		{"owner", nil},    // moderation
+		{"other", domain.ErrForbidden},
+		{"outsider", domain.ErrNotFound},
+	} {
+		t.Run("delete by "+tc.user, func(t *testing.T) {
+			f, id := setup(t)
+			wantErr(t, f.svc.DeleteComment(ctx, tc.user, taskT, id), tc.want)
+			if (len(f.s.comments) == 0) != (tc.want == nil) {
+				t.Fatalf("comments left = %d", len(f.s.comments))
+			}
+		})
+	}
+}

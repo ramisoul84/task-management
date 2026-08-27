@@ -214,7 +214,7 @@ func (h *TaskHandler) GetHistory(c *fiber.Ctx) error {
 // AddComment godoc
 //
 //	@Summary	Comment on a task
-//	@Tags		Tasks
+//	@Tags		Comments
 //	@Security	BearerAuth
 //	@Accept		json
 //	@Produce	json
@@ -250,7 +250,7 @@ func (h *TaskHandler) AddComment(c *fiber.Ctx) error {
 // ListComments godoc
 //
 //	@Summary	List task comments
-//	@Tags		Tasks
+//	@Tags		Comments
 //	@Security	BearerAuth
 //	@Produce	json
 //	@Param		id	path		string	true	"Task ID"	format(uuid)
@@ -274,4 +274,80 @@ func (h *TaskHandler) ListComments(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(comments)
+}
+
+// EditComment godoc
+//
+//	@Summary	Edit a comment
+//	@Tags		Comments
+//	@Security	BearerAuth
+//	@Accept		json
+//	@Produce	json
+//	@Param		id			path		string						true	"Task ID"		format(uuid)
+//	@Param		commentID	path		string						true	"Comment ID"	format(uuid)
+//	@Param		request		body		domain.CreateCommentRequest	true	"New content"
+//	@Success	200			{object}	domain.TaskComment
+//	@Failure	400			{object}	ErrorResponse
+//	@Failure	401			{object}	ErrorResponse
+//	@Failure	403			{object}	ErrorResponse	"Not the author"
+//	@Failure	404			{object}	ErrorResponse
+//	@Router		/tasks/{id}/comments/{commentID} [patch]
+func (h *TaskHandler) EditComment(c *fiber.Ctx) error {
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+	taskID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
+	}
+	commentID, err := pathUUID(c, h.v, "commentID")
+	if err != nil {
+		return err
+	}
+
+	var req domain.CreateCommentRequest
+	if err := bindJSON(c, h.v, &req); err != nil {
+		return err
+	}
+
+	comment, err := h.svc.EditComment(c.UserContext(), userID, taskID, commentID, &req)
+	if err != nil {
+		return err
+	}
+	return c.JSON(comment)
+}
+
+// DeleteComment godoc
+//
+//	@Summary		Delete a comment
+//	@Description	Allowed to the comment's author and to team owners/admins.
+//	@Tags			Comments
+//	@Security		BearerAuth
+//	@Param			id			path	string	true	"Task ID"		format(uuid)
+//	@Param			commentID	path	string	true	"Comment ID"	format(uuid)
+//	@Success		204
+//	@Failure		400	{object}	ErrorResponse
+//	@Failure		401	{object}	ErrorResponse
+//	@Failure		403	{object}	ErrorResponse
+//	@Failure		404	{object}	ErrorResponse
+//	@Router			/tasks/{id}/comments/{commentID} [delete]
+func (h *TaskHandler) DeleteComment(c *fiber.Ctx) error {
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+	taskID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
+	}
+	commentID, err := pathUUID(c, h.v, "commentID")
+	if err != nil {
+		return err
+	}
+
+	if err := h.svc.DeleteComment(c.UserContext(), userID, taskID, commentID); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }

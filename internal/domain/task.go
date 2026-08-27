@@ -134,7 +134,8 @@ func (r *UpdateTaskRequest) IsEmpty() bool {
 		r.Priority == nil && !r.DueAt.Set
 }
 
-// CreateCommentRequest is the body of POST /tasks/{id}/comments.
+// CreateCommentRequest is the body of POST /tasks/{id}/comments and
+// PATCH /tasks/{id}/comments/{commentID}.
 type CreateCommentRequest struct {
 	Content string `json:"content" validate:"required,notblank,max=5000" example:"This bug is caused by a race condition in the auth flow"`
 }
@@ -144,8 +145,11 @@ type TaskComment struct {
 	ID        string    `json:"id" db:"id" example:"123e4567-e89b-12d3-a456-426614174004"`
 	TaskID    string    `json:"task_id" db:"task_id" example:"123e4567-e89b-12d3-a456-426614174000"`
 	UserID    string    `json:"user_id" db:"user_id" example:"123e4567-e89b-12d3-a456-426614174002"`
+	UserName  string    `json:"user_name,omitempty" db:"user_name" example:"Rami Suliman"`
 	Content   string    `json:"content" db:"content" example:"This bug is caused by a race condition"`
 	CreatedAt time.Time `json:"created_at" db:"created_at" example:"2024-01-15T11:00:00Z"`
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at" example:"2024-01-15T11:00:00Z"`
+	Edited    bool      `json:"edited" db:"edited" example:"false"`
 }
 
 // FieldChange captures a field's value before and after a change.
