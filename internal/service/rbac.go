@@ -101,3 +101,13 @@ func TaskPermissionsFor(role domain.Role, userID string, task *domain.Task) Task
 		return TaskPermissions{}
 	}
 }
+
+// CanEditComment: only the author may rewrite their words.
+func CanEditComment(userID string, c *domain.TaskComment) bool {
+	return c.UserID == userID
+}
+
+// CanDeleteComment: the author, or a team manager moderating.
+func CanDeleteComment(role domain.Role, userID string, c *domain.TaskComment) bool {
+	return c.UserID == userID || role.IsManager()
+}

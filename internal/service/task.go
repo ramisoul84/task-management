@@ -29,6 +29,8 @@ type TaskService interface {
 	DeleteTask(ctx context.Context, userID, taskID string) error
 	GetHistory(ctx context.Context, userID, taskID string) ([]*domain.TaskHistory, error)
 	AddComment(ctx context.Context, userID, taskID string, req *domain.CreateCommentRequest) (*domain.TaskComment, error)
+	EditComment(ctx context.Context, userID, taskID, commentID string, req *domain.CreateCommentRequest) (*domain.TaskComment, error)
+	DeleteComment(ctx context.Context, userID, taskID, commentID string) error
 	ListComments(ctx context.Context, userID, taskID string) ([]*domain.TaskComment, error)
 }
 
@@ -188,7 +190,7 @@ func (s *taskService) ListTasks(ctx context.Context, userID string, q *domain.Ta
 
 // GetTask returns a single task visible to the caller.
 func (s *taskService) GetTask(ctx context.Context, userID, taskID string) (*domain.Task, error) {
-	task, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID)
+	task, _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID)
 	return task, err
 }
 
@@ -393,32 +395,77 @@ func (s *taskService) applyUpdate(
 }
 
 func (s *taskService) GetHistory(ctx context.Context, userID, taskID string) ([]*domain.TaskHistory, error) {
-	if _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID); err != nil {
+	if _, _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID); err != nil {
 		return nil, err
 	}
 	return s.tasks.ListHistory(ctx, taskID)
 }
 
 func (s *taskService) AddComment(ctx context.Context, userID, taskID string, req *domain.CreateCommentRequest) (*domain.TaskComment, error) {
-	if _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID); err != nil {
+	if _, _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID); err != nil {
 		return nil, err
 	}
 
+	now := s.now()
 	comment := &domain.TaskComment{
 		ID:        uuid.NewString(),
 		TaskID:    taskID,
 		UserID:    userID,
 		Content:   strings.TrimSpace(req.Content),
-		CreatedAt: s.now(),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if err := s.tasks.AddComment(ctx, comment); err != nil {
 		return nil, err
 	}
-	return comment, nil
+	return s.tasks.GetComment(ctx, taskID, comment.ID)
+}
+
+// EditComment lets authors change their own comments.
+func (s *taskService) EditComment(
+	ctx context.Context, userID, taskID, commentID string, req *domain.CreateCommentRequest,
+) (*domain.TaskComment, error) {
+	if _, _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID); err != nil {
+		return nil, err
+	}
+	comment, err := s.tasks.GetComment(ctx, taskID, commentID)
+	if err != nil {
+		return nil, err
+	}
+	if !CanEditComment(userID, comment) {
+		return nil, domain.ErrForbidden.WithMessage("you can only edit your own comments")
+	}
+
+	content := strings.TrimSpace(req.Content)
+	if content == comment.Content {
+		return comment, nil
+	}
+	comment.Content = content
+	comment.UpdatedAt = s.now()
+	if err := s.tasks.UpdateComment(ctx, comment); err != nil {
+		return nil, err
+	}
+	return s.tasks.GetComment(ctx, taskID, commentID)
+}
+
+// DeleteComment lets authors delete their comments and managers moderate.
+func (s *taskService) DeleteComment(ctx context.Context, userID, taskID, commentID string) error {
+	_, role, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID)
+	if err != nil {
+		return err
+	}
+	comment, err := s.tasks.GetComment(ctx, taskID, commentID)
+	if err != nil {
+		return err
+	}
+	if !CanDeleteComment(role, userID, comment) {
+		return domain.ErrForbidden.WithMessage("only the author or a team manager can delete a comment")
+	}
+	return s.tasks.DeleteComment(ctx, commentID)
 }
 
 func (s *taskService) ListComments(ctx context.Context, userID, taskID string) ([]*domain.TaskComment, error) {
-	if _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID); err != nil {
+	if _, _, err := visibleTask(ctx, s.tasks, s.teams, taskID, userID); err != nil {
 		return nil, err
 	}
 	return s.tasks.ListComments(ctx, taskID)

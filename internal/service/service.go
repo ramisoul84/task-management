@@ -26,7 +26,7 @@ func memberRole(ctx context.Context, teams repository.TeamRepository, teamID, us
 	return role, err
 }
 
-// visibleTask loads a task the caller may see. To avoid
+// visibleTask loads a task and the caller's role in its team. To avoid
 // leaking which task IDs exist, a task in a team the caller does not
 // belong to is reported as not found.
 func visibleTask(
@@ -34,18 +34,18 @@ func visibleTask(
 	tasks repository.TaskRepository,
 	teams repository.TeamRepository,
 	taskID, userID string,
-) (*domain.Task, error) {
+) (*domain.Task, domain.Role, error) {
 	task, err := tasks.GetByID(ctx, taskID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	ok, err := teams.IsMember(ctx, task.TeamID, userID)
+	role, err := teams.GetMemberRole(ctx, task.TeamID, userID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil, "", domain.ErrNotFound.WithMessage("task not found")
+	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if !ok {
-		return nil, domain.ErrNotFound.WithMessage("task not found")
-	}
-	return task, nil
+	return task, role, nil
 }

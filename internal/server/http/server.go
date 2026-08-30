@@ -158,6 +158,8 @@ func (s *Server) routes() {
 	tasks.Get("/:id/history", h.Task.GetHistory)
 	tasks.Post("/:id/comments", h.Task.AddComment)
 	tasks.Get("/:id/comments", h.Task.ListComments)
+	tasks.Patch("/:id/comments/:commentID", h.Task.EditComment)
+	tasks.Delete("/:id/comments/:commentID", h.Task.DeleteComment)
 }
 
 func (s *Server) livez(c *fiber.Ctx) error {

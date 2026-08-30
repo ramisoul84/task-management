@@ -411,6 +411,44 @@ func (r taskRepo) AddComment(_ context.Context, c *domain.TaskComment) error {
 	return nil
 }
 
+func (r taskRepo) GetComment(_ context.Context, taskID, commentID string) (*domain.TaskComment, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for _, c := range r.s.comments {
+		if c.ID == commentID && c.TaskID == taskID {
+			cp := *c
+			cp.Edited = cp.UpdatedAt.After(cp.CreatedAt)
+			return &cp, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (r taskRepo) UpdateComment(_ context.Context, c *domain.TaskComment) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for i, existing := range r.s.comments {
+		if existing.ID == c.ID {
+			cp := *c
+			r.s.comments[i] = &cp
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (r taskRepo) DeleteComment(_ context.Context, commentID string) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for i, c := range r.s.comments {
+		if c.ID == commentID {
+			r.s.comments = slices.Delete(r.s.comments, i, i+1)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
 func (r taskRepo) ListComments(_ context.Context, taskID string) ([]*domain.TaskComment, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
