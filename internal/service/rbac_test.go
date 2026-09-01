@@ -133,3 +133,37 @@ func TestTaskPermissionsFor(t *testing.T) {
 		}
 	})
 }
+
+func TestTeamLevelPolicies(t *testing.T) {
+	wantErr(t, service.CanRenameTeam(owner), nil)
+	wantErr(t, service.CanRenameTeam(admin), nil)
+	wantErr(t, service.CanRenameTeam(member), domain.ErrForbidden)
+
+	wantErr(t, service.CanDeleteTeam(owner), nil)
+	wantErr(t, service.CanDeleteTeam(admin), domain.ErrForbidden)
+
+	wantErr(t, service.CanLeave(admin), nil)
+	wantErr(t, service.CanLeave(member), nil)
+	wantErr(t, service.CanLeave(owner), domain.ErrForbidden)
+
+	wantErr(t, service.CanTransferOwnership(owner, false), nil)
+	wantErr(t, service.CanTransferOwnership(owner, true), domain.ErrInvalidInput)
+	wantErr(t, service.CanTransferOwnership(admin, false), domain.ErrForbidden)
+}
+
+func TestCommentPolicies(t *testing.T) {
+	c := &domain.TaskComment{UserID: "author"}
+
+	if !service.CanEditComment("author", c) || service.CanEditComment("owner-user", c) {
+		t.Fatal("only the author may edit")
+	}
+	if !service.CanDeleteComment(member, "author", c) {
+		t.Fatal("author may delete")
+	}
+	if !service.CanDeleteComment(admin, "mod", c) || !service.CanDeleteComment(owner, "mod", c) {
+		t.Fatal("managers may delete (moderation)")
+	}
+	if service.CanDeleteComment(member, "someone", c) {
+		t.Fatal("other members may not delete")
+	}
+}

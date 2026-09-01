@@ -87,7 +87,7 @@ func TestInviteMember(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newTeamFixture(t)
-			err := f.svc.InviteMember(ctx, tc.actor, teamA, &domain.InviteMemberRequest{UserID: tc.user})
+			_, err := f.svc.InviteMember(ctx, tc.actor, teamA, &domain.InviteMemberRequest{UserID: tc.user})
 			wantErr(t, err, tc.want)
 
 			if tc.want == nil && f.s.members[teamA][tc.user] != member {
@@ -174,4 +174,97 @@ func TestGetStats_ManagersOnly(t *testing.T) {
 	wantErr(t, err, domain.ErrForbidden)
 	_, err = f.svc.GetStats(ctx, "outsider", teamA)
 	wantErr(t, err, domain.ErrForbidden)
+}
+
+func TestInviteMember_ByEmailWithRole(t *testing.T) {
+	ctx := context.Background()
+	f := newTeamFixture(t)
+
+	added, err := f.svc.InviteMember(ctx, "owner", teamA, &domain.InviteMemberRequest{Email: "NEWBIE@example.com", Role: admin})
+	wantErr(t, err, nil)
+	if added.UserID != "newbie" || added.Role != admin || f.s.members[teamA]["newbie"] != admin {
+		t.Fatalf("added = %+v", added)
+	}
+
+	_, err = f.svc.InviteMember(ctx, "owner", teamA, &domain.InviteMemberRequest{Email: "nobody@example.com"})
+	wantErr(t, err, domain.ErrNotFound)
+
+	_, err = f.svc.InviteMember(ctx, "owner", teamA, &domain.InviteMemberRequest{UserID: "outsider", Role: owner})
+	wantErr(t, err, domain.ErrInvalidInput)
+}
+
+func TestTeamLifecycle(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("get requires membership and reports role", func(t *testing.T) {
+		f := newTeamFixture(t)
+		team, err := f.svc.GetTeam(ctx, "admin", teamA)
+		wantErr(t, err, nil)
+		if team.Role != admin {
+			t.Fatalf("role = %s", team.Role)
+		}
+		_, err = f.svc.GetTeam(ctx, "outsider", teamA)
+		wantErr(t, err, domain.ErrForbidden)
+	})
+
+	t.Run("managers rename, members cannot", func(t *testing.T) {
+		f := newTeamFixture(t)
+		team, err := f.svc.RenameTeam(ctx, "admin", teamA, "  Renamed ")
+		wantErr(t, err, nil)
+		if team.Name != "Renamed" {
+			t.Fatalf("name = %q", team.Name)
+		}
+		_, err = f.svc.RenameTeam(ctx, "member", teamA, "Nope")
+		wantErr(t, err, domain.ErrForbidden)
+	})
+
+	t.Run("only the owner deletes", func(t *testing.T) {
+		f := newTeamFixture(t)
+		wantErr(t, f.svc.DeleteTeam(ctx, "admin", teamA), domain.ErrForbidden)
+		wantErr(t, f.svc.DeleteTeam(ctx, "outsider", teamA), domain.ErrForbidden)
+		wantErr(t, f.svc.DeleteTeam(ctx, "owner", teamA), nil)
+		if _, ok := f.s.teams[teamA]; ok {
+			t.Fatal("team not deleted")
+		}
+		if len(f.cache.invalidated) != 1 {
+			t.Fatal("deleting a team must invalidate its task cache")
+		}
+	})
+
+	t.Run("members leave and their tasks are unassigned; owner cannot leave", func(t *testing.T) {
+		f := newTeamFixture(t)
+		assignee := "member"
+		f.s.addTask(domain.Task{ID: "t1", TeamID: teamA, CreatedBy: "owner", AssigneeID: &assignee})
+
+		wantErr(t, f.svc.LeaveTeam(ctx, "member", teamA), nil)
+		if _, still := f.s.members[teamA]["member"]; still {
+			t.Fatal("member still in team")
+		}
+		if f.s.tasks["t1"].AssigneeID != nil {
+			t.Fatal("leaving must unassign the member's tasks")
+		}
+		wantErr(t, f.svc.LeaveTeam(ctx, "owner", teamA), domain.ErrForbidden)
+		wantErr(t, f.svc.LeaveTeam(ctx, "outsider", teamA), domain.ErrForbidden)
+	})
+
+	t.Run("ownership transfer keeps exactly one owner", func(t *testing.T) {
+		f := newTeamFixture(t)
+		wantErr(t, f.svc.TransferOwnership(ctx, "admin", teamA, "member"), domain.ErrForbidden)
+		wantErr(t, f.svc.TransferOwnership(ctx, "owner", teamA, "outsider"), domain.ErrNotFound)
+		wantErr(t, f.svc.TransferOwnership(ctx, "owner", teamA, "owner"), domain.ErrInvalidInput)
+
+		wantErr(t, f.svc.TransferOwnership(ctx, "owner", teamA, "member"), nil)
+		if f.s.members[teamA]["member"] != owner || f.s.members[teamA]["owner"] != admin {
+			t.Fatalf("roles after transfer = %v", f.s.members[teamA])
+		}
+		owners := 0
+		for _, r := range f.s.members[teamA] {
+			if r == owner {
+				owners++
+			}
+		}
+		if owners != 1 {
+			t.Fatalf("team has %d owners", owners)
+		}
+	})
 }

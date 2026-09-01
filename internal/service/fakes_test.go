@@ -171,6 +171,41 @@ func (r teamRepo) ListByUser(_ context.Context, userID string) ([]*domain.Team, 
 	return out, nil
 }
 
+func (r teamRepo) GetByID(_ context.Context, id string) (*domain.Team, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if t, ok := r.s.teams[id]; ok {
+		cp := *t
+		return &cp, nil
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (r teamRepo) Rename(_ context.Context, id, name string) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if t, ok := r.s.teams[id]; ok {
+		t.Name = name
+	}
+	return nil
+}
+
+func (r teamRepo) Delete(_ context.Context, id string) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if _, ok := r.s.teams[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(r.s.teams, id)
+	delete(r.s.members, id)
+	for tid, t := range r.s.tasks {
+		if t.TeamID == id {
+			delete(r.s.tasks, tid)
+		}
+	}
+	return nil
+}
+
 func (r teamRepo) AddMember(_ context.Context, m *domain.TeamMember) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()

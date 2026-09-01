@@ -13,6 +13,11 @@ import (
 type TeamRepository interface {
 	Create(ctx context.Context, team *domain.Team) error
 	ListByUser(ctx context.Context, userID string) ([]*domain.Team, error)
+	GetByID(ctx context.Context, id string) (*domain.Team, error)
+	Rename(ctx context.Context, id, name string) error
+	// Delete removes the team; memberships, tasks, history and comments
+	// cascade.
+	Delete(ctx context.Context, id string) error
 
 	AddMember(ctx context.Context, member *domain.TeamMember) error
 	// GetMemberRole returns ErrNotFound when userID is not in the team.
@@ -59,6 +64,37 @@ func (r *teamRepo) ListByUser(ctx context.Context, userID string) ([]*domain.Tea
 		return nil, fmt.Errorf("teamRepo.ListByUser: %w", err)
 	}
 	return teams, nil
+}
+
+func (r *teamRepo) GetByID(ctx context.Context, id string) (*domain.Team, error) {
+	var t domain.Team
+	err := r.db.Q(ctx).GetContext(ctx, &t, `SELECT id, name, created_by, created_at FROM teams WHERE id = ?`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, domain.ErrNotFound.WithMessage("team not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("teamRepo.GetByID: %w", err)
+	}
+	return &t, nil
+}
+
+func (r *teamRepo) Rename(ctx context.Context, id, name string) error {
+	res, err := r.db.Q(ctx).ExecContext(ctx, `UPDATE teams SET name = ? WHERE id = ?`, name, id)
+	if err != nil {
+		return fmt.Errorf("teamRepo.Rename: %w", err)
+	}
+	if _, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("teamRepo.Rename: rows affected: %w", err)
+	}
+	return nil
+}
+
+func (r *teamRepo) Delete(ctx context.Context, id string) error {
+	res, err := r.db.Q(ctx).ExecContext(ctx, `DELETE FROM teams WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("teamRepo.Delete: %w", err)
+	}
+	return requireAffected(res, domain.ErrNotFound.WithMessage("team not found"))
 }
 
 func (r *teamRepo) AddMember(ctx context.Context, m *domain.TeamMember) error {
