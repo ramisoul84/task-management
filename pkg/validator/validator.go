@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"unicode"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/go-playground/validator/v10/non-standard/validators"
@@ -92,9 +93,9 @@ func message(fe validator.FieldError) string {
 	case "required":
 		return "is required"
 	case "required_without":
-		return "is required when " + fe.Param() + " is not set"
+		return "is required when " + snake(fe.Param()) + " is not set"
 	case "excluded_with":
-		return "cannot be combined with " + fe.Param()
+		return "cannot be combined with " + snake(fe.Param())
 	case "email":
 		return "must be a valid email address"
 	case "uuid":
@@ -120,4 +121,18 @@ func message(fe validator.FieldError) string {
 	default:
 		return "is invalid"
 	}
+}
+
+// snake converts a Go field name (UserID) to its JSON form (user_id).
+func snake(s string) string {
+	var b strings.Builder
+	runes := []rune(s)
+	for i, r := range runes {
+		upper := unicode.IsUpper(r)
+		if upper && i > 0 && (unicode.IsLower(runes[i-1]) || (i+1 < len(runes) && unicode.IsLower(runes[i+1]))) {
+			b.WriteByte('_')
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
 }

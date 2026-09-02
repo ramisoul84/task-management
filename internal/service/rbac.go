@@ -111,3 +111,39 @@ func CanEditComment(userID string, c *domain.TaskComment) bool {
 func CanDeleteComment(role domain.Role, userID string, c *domain.TaskComment) bool {
 	return c.UserID == userID || role.IsManager()
 }
+
+// CanRenameTeam: owner or admin.
+func CanRenameTeam(role domain.Role) error {
+	if !role.IsManager() {
+		return domain.ErrForbidden.WithMessage("only the team owner or an admin can rename the team")
+	}
+	return nil
+}
+
+// CanDeleteTeam: owner only. Deleting a team destroys all of its tasks.
+func CanDeleteTeam(role domain.Role) error {
+	if role != domain.RoleOwner {
+		return domain.ErrForbidden.WithMessage("only the team owner can delete the team")
+	}
+	return nil
+}
+
+// CanLeave: anyone but the owner, who must transfer ownership first so the
+// team is never left without one.
+func CanLeave(role domain.Role) error {
+	if role == domain.RoleOwner {
+		return domain.ErrForbidden.WithMessage("the owner cannot leave; transfer ownership first")
+	}
+	return nil
+}
+
+// CanTransferOwnership: only the owner, to another existing member.
+func CanTransferOwnership(actor domain.Role, self bool) error {
+	switch {
+	case actor != domain.RoleOwner:
+		return domain.ErrForbidden.WithMessage("only the team owner can transfer ownership")
+	case self:
+		return domain.ErrInvalidInput.WithMessage("you already own this team")
+	}
+	return nil
+}

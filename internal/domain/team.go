@@ -38,9 +38,30 @@ type CreateTeamRequest struct {
 	Name string `json:"name" validate:"required,notblank,min=2,max=255" example:"Development Team"`
 }
 
-// InviteMemberRequest represents member invitation data
+// InviteMemberRequest adds an existing user to a team, identified by
+// either user_id or email (exactly one). Role defaults to member; the
+// owner role can never be granted by invitation.
 type InviteMemberRequest struct {
+	UserID string `json:"user_id,omitempty" validate:"required_without=Email,excluded_with=Email,omitempty,uuid" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Email  string `json:"email,omitempty" validate:"required_without=UserID,omitempty,email,max=255" example:"colleague@example.com"`
+	Role   Role   `json:"role,omitempty" validate:"omitempty,oneof=admin member" example:"member"`
+}
+
+// UpdateTeamRequest renames a team.
+type UpdateTeamRequest struct {
+	Name string `json:"name" validate:"required,notblank,min=2,max=255" example:"Platform Team"`
+}
+
+// TransferOwnershipRequest hands the owner role to another member.
+type TransferOwnershipRequest struct {
 	UserID string `json:"user_id" validate:"required,uuid" example:"123e4567-e89b-12d3-a456-426614174001"`
+}
+
+// TeamMemberAdded is returned by POST /teams/{id}/invite.
+type TeamMemberAdded struct {
+	TeamID string `json:"team_id" example:"123e4567-e89b-12d3-a456-426614174000"`
+	UserID string `json:"user_id" example:"123e4567-e89b-12d3-a456-426614174001"`
+	Role   Role   `json:"role" example:"member"`
 }
 
 // ChangeMemberRoleRequest represents role change data

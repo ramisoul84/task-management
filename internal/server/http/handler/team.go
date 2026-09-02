@@ -76,14 +76,15 @@ func (h *TeamHandler) List(c *fiber.Ctx) error {
 // Invite godoc
 //
 //	@Summary		Invite a member
-//	@Description	Adds an existing user to the team as a member. Owner or admin only.
+//	@Description	Adds an existing user (by user_id or email) to the team as admin or member. Owner or admin only; the owner role cannot be granted this way.
 //	@Tags			Teams
 //	@Security		BearerAuth
 //	@Accept			json
-//	@Param			id		path	string						true	"Team ID"	format(uuid)
-//	@Param			request	body	domain.InviteMemberRequest	true	"Who to invite"
-//	@Success		204
-//	@Failure		400	{object}	ErrorResponse	"Validation error"
+//	@Produce		json
+//	@Param			id		path		string						true	"Team ID"	format(uuid)
+//	@Param			request	body		domain.InviteMemberRequest	true	"Who to invite"
+//	@Success		201		{object}	domain.TeamMemberAdded
+//	@Failure		400		{object}	ErrorResponse	"Validation error"
 //	@Failure		401	{object}	ErrorResponse
 //	@Failure		403	{object}	ErrorResponse	"Not a team manager"
 //	@Failure		404	{object}	ErrorResponse	"User not found"
@@ -104,10 +105,11 @@ func (h *TeamHandler) Invite(c *fiber.Ctx) error {
 		return err
 	}
 
-	if err := h.svc.InviteMember(c.UserContext(), userID, teamID, &req); err != nil {
+	added, err := h.svc.InviteMember(c.UserContext(), userID, teamID, &req)
+	if err != nil {
 		return err
 	}
-	return c.SendStatus(fiber.StatusNoContent)
+	return c.Status(fiber.StatusCreated).JSON(added)
 }
 
 // ListMembers godoc
@@ -242,4 +244,161 @@ func (h *TeamHandler) GetStats(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(stats)
+}
+
+// Get godoc
+//
+//	@Summary	Get a team
+//	@Tags		Teams
+//	@Security	BearerAuth
+//	@Produce	json
+//	@Param		id	path		string	true	"Team ID"	format(uuid)
+//	@Success	200	{object}	domain.Team
+//	@Failure	400	{object}	ErrorResponse
+//	@Failure	401	{object}	ErrorResponse
+//	@Failure	403	{object}	ErrorResponse	"Not a team member"
+//	@Router		/teams/{id} [get]
+func (h *TeamHandler) Get(c *fiber.Ctx) error {
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+	teamID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
+	}
+
+	team, err := h.svc.GetTeam(c.UserContext(), userID, teamID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(team)
+}
+
+// Rename godoc
+//
+//	@Summary	Rename a team
+//	@Tags		Teams
+//	@Security	BearerAuth
+//	@Accept		json
+//	@Produce	json
+//	@Param		id		path		string						true	"Team ID"	format(uuid)
+//	@Param		request	body		domain.UpdateTeamRequest	true	"New name"
+//	@Success	200		{object}	domain.Team
+//	@Failure	400		{object}	ErrorResponse
+//	@Failure	401		{object}	ErrorResponse
+//	@Failure	403		{object}	ErrorResponse	"Not owner/admin"
+//	@Router		/teams/{id} [patch]
+func (h *TeamHandler) Rename(c *fiber.Ctx) error {
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+	teamID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
+	}
+
+	var req domain.UpdateTeamRequest
+	if err := bindJSON(c, h.v, &req); err != nil {
+		return err
+	}
+
+	team, err := h.svc.RenameTeam(c.UserContext(), userID, teamID, req.Name)
+	if err != nil {
+		return err
+	}
+	return c.JSON(team)
+}
+
+// Delete godoc
+//
+//	@Summary		Delete a team
+//	@Description	Permanently deletes the team with all of its tasks, history and comments. Owner only.
+//	@Tags			Teams
+//	@Security		BearerAuth
+//	@Param			id	path	string	true	"Team ID"	format(uuid)
+//	@Success		204
+//	@Failure		400	{object}	ErrorResponse
+//	@Failure		401	{object}	ErrorResponse
+//	@Failure		403	{object}	ErrorResponse	"Not the owner"
+//	@Router			/teams/{id} [delete]
+func (h *TeamHandler) Delete(c *fiber.Ctx) error {
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+	teamID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
+	}
+
+	if err := h.svc.DeleteTeam(c.UserContext(), userID, teamID); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// Leave godoc
+//
+//	@Summary		Leave a team
+//	@Description	Removes the caller from the team and unassigns their tasks. The owner must transfer ownership first.
+//	@Tags			Teams
+//	@Security		BearerAuth
+//	@Param			id	path	string	true	"Team ID"	format(uuid)
+//	@Success		204
+//	@Failure		400	{object}	ErrorResponse
+//	@Failure		401	{object}	ErrorResponse
+//	@Failure		403	{object}	ErrorResponse	"Owner cannot leave / not a member"
+//	@Router			/teams/{id}/leave [post]
+func (h *TeamHandler) Leave(c *fiber.Ctx) error {
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+	teamID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
+	}
+
+	if err := h.svc.LeaveTeam(c.UserContext(), userID, teamID); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// TransferOwnership godoc
+//
+//	@Summary		Transfer team ownership
+//	@Description	Makes another member the owner; the current owner becomes an admin. Owner only.
+//	@Tags			Teams
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Param			id		path	string							true	"Team ID"	format(uuid)
+//	@Param			request	body	domain.TransferOwnershipRequest	true	"New owner"
+//	@Success		204
+//	@Failure		400	{object}	ErrorResponse
+//	@Failure		401	{object}	ErrorResponse
+//	@Failure		403	{object}	ErrorResponse	"Not the owner"
+//	@Failure		404	{object}	ErrorResponse	"Target is not a member"
+//	@Router			/teams/{id}/transfer-ownership [post]
+func (h *TeamHandler) TransferOwnership(c *fiber.Ctx) error {
+	userID, err := currentUser(c)
+	if err != nil {
+		return err
+	}
+	teamID, err := pathUUID(c, h.v, "id")
+	if err != nil {
+		return err
+	}
+
+	var req domain.TransferOwnershipRequest
+	if err := bindJSON(c, h.v, &req); err != nil {
+		return err
+	}
+
+	if err := h.svc.TransferOwnership(c.UserContext(), userID, teamID, req.UserID); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
