@@ -67,12 +67,14 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 
 	// Services
 	authSvc := service.NewAuthService(userRepo, tokenCache, tokens, hasher, cfg.Auth.AccessTokenTTL)
+	userSvc := service.NewUserService(userRepo, hasher)
 	teamSvc := service.NewTeamService(db, teamRepo, userRepo, taskRepo, taskCache)
 	taskSvc := service.NewTaskService(db, taskRepo, teamRepo, taskCache)
 
 	// Handlers
 	handlers := httpserver.Handlers{
 		Auth: handler.NewAuthHandler(authSvc, v, cfg.Auth),
+		User: handler.NewUserHandler(userSvc, v),
 		Team: handler.NewTeamHandler(teamSvc, v),
 		Task: handler.NewTaskHandler(taskSvc, v),
 	}

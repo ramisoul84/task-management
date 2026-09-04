@@ -116,6 +116,8 @@ func message(fe validator.FieldError) string {
 		return "must be greater than or equal to " + fe.Param()
 	case "lte":
 		return "must be less than or equal to " + fe.Param()
+	case "nefield":
+		return "must differ from " + snake(fe.Param())
 	case "notblank":
 		return "must not be blank"
 	default:

@@ -25,6 +25,7 @@ type HealthCheck func(ctx context.Context) error
 // Handlers groups the resource handlers.
 type Handlers struct {
 	Auth *handler.AuthHandler
+	User *handler.UserHandler
 	Team *handler.TeamHandler
 	Task *handler.TaskHandler
 }
@@ -139,6 +140,11 @@ func (s *Server) routes() {
 
 	// Everything below requires a valid access token.
 	protected := api.Group("", middleware.Auth(s.deps.Tokens, s.deps.TokenCache))
+
+	users := protected.Group("/users")
+	users.Get("/me", h.User.Me)
+	users.Patch("/me", h.User.UpdateProfile)
+	users.Put("/me/password", h.User.ChangePassword)
 
 	teams := protected.Group("/teams")
 	teams.Post("/", h.Team.Create)

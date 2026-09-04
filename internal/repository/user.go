@@ -14,6 +14,8 @@ type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
 	GetByID(ctx context.Context, id string) (*domain.User, error)
+	UpdateName(ctx context.Context, id, name string) error
+	UpdatePasswordHash(ctx context.Context, id, hash string) error
 }
 
 type userRepo struct {
@@ -55,4 +57,19 @@ func (r *userRepo) getOne(ctx context.Context, q string, arg any) (*domain.User,
 		return nil, fmt.Errorf("userRepo.get: %w", err)
 	}
 	return &u, nil
+}
+
+func (r *userRepo) UpdateName(ctx context.Context, id, name string) error {
+	return r.update(ctx, `UPDATE users SET name = ? WHERE id = ?`, name, id)
+}
+
+func (r *userRepo) UpdatePasswordHash(ctx context.Context, id, hash string) error {
+	return r.update(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, hash, id)
+}
+
+func (r *userRepo) update(ctx context.Context, q, value, id string) error {
+	if _, err := r.db.Q(ctx).ExecContext(ctx, q, value, id); err != nil {
+		return fmt.Errorf("userRepo.update: %w", err)
+	}
+	return nil
 }
