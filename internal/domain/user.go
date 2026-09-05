@@ -13,7 +13,7 @@ type User struct {
 
 // Response converts the user to its public representation.
 func (u *User) Response() UserResponse {
-	return UserResponse{ID: u.ID, Email: u.Email, Name: u.Name}
+	return UserResponse{ID: u.ID, Email: u.Email, Name: u.Name, CreatedAt: u.CreatedAt}
 }
 
 // RegisterRequest represents user registration data
@@ -31,9 +31,21 @@ type LoginRequest struct {
 
 // UserResponse represents user data returned in API responses
 type UserResponse struct {
-	ID    string `json:"id" example:"123e4567-e89b-12d3-a456-426614174000"`
-	Email string `json:"email" example:"rami@mail.ru"`
-	Name  string `json:"name" example:"Rami Suliman"`
+	ID        string    `json:"id" example:"123e4567-e89b-12d3-a456-426614174000"`
+	Email     string    `json:"email" example:"rami@mail.ru"`
+	Name      string    `json:"name" example:"Rami Suliman"`
+	CreatedAt time.Time `json:"created_at,omitzero" example:"2024-01-15T10:30:00Z"`
+}
+
+// UpdateProfileRequest is the body of PATCH /users/me.
+type UpdateProfileRequest struct {
+	Name string `json:"name" validate:"required,notblank,min=2,max=255" example:"Rami Suliman"`
+}
+
+// ChangePasswordRequest is the body of PUT /users/me/password.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password" validate:"required,max=72" example:"OldPass123!"`
+	NewPassword     string `json:"new_password" validate:"required,min=8,max=72,nefield=CurrentPassword" example:"NewPass456!"`
 }
 
 // LoginResponse represents successful login response

@@ -138,6 +138,26 @@ func (r userRepo) GetByID(_ context.Context, id string) (*domain.User, error) {
 	return nil, domain.ErrNotFound
 }
 
+func (r userRepo) UpdateName(_ context.Context, id, name string) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if u, ok := r.s.users[id]; ok {
+		u.Name = name
+		return nil
+	}
+	return domain.ErrNotFound
+}
+
+func (r userRepo) UpdatePasswordHash(_ context.Context, id, hash string) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if u, ok := r.s.users[id]; ok {
+		u.PasswordHash = hash
+		return nil
+	}
+	return domain.ErrNotFound
+}
+
 // ---------- teams ----------
 
 type teamRepo struct{ s *store }
