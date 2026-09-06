@@ -34,6 +34,7 @@ type Config struct {
 	HTTP      HTTPConfig
 	DB        database.Config
 	Redis     redisx.Config
+	Breaker   BreakerConfig
 	Auth      AuthConfig
 	Cache     CacheConfig
 	RateLimit RateLimitConfig
@@ -71,6 +72,12 @@ type AuthConfig struct {
 	CookieDomain    string
 	CookieSecure    bool
 	CookieSameSite  string
+}
+
+type BreakerConfig struct {
+	Enabled             bool
+	ConsecutiveFailures int
+	OpenTimeout         time.Duration
 }
 
 type CacheConfig struct {
@@ -145,15 +152,23 @@ func Load() (*Config, error) {
 		},
 
 		Redis: redisx.Config{
-			Addr:         e.str("REDIS_ADDR", "localhost:6379"),
-			Password:     e.str("REDIS_PASSWORD", ""),
-			DB:           e.int("REDIS_DB", 0),
-			MaxRetries:   e.int("REDIS_MAX_RETRIES", 3),
-			DialTimeout:  e.duration("REDIS_DIAL_TIMEOUT", 5*time.Second),
-			ReadTimeout:  e.duration("REDIS_READ_TIMEOUT", 3*time.Second),
-			WriteTimeout: e.duration("REDIS_WRITE_TIMEOUT", 3*time.Second),
+			Addr:     e.str("REDIS_ADDR", "localhost:6379"),
+			Password: e.str("REDIS_PASSWORD", ""),
+			DB:       e.int("REDIS_DB", 0),
+			// Redis sits on the request path (cache, rate limit, token
+			// checks), so keep timeouts tight; the breaker handles outages.
+			MaxRetries:   e.int("REDIS_MAX_RETRIES", 2),
+			DialTimeout:  e.duration("REDIS_DIAL_TIMEOUT", 2*time.Second),
+			ReadTimeout:  e.duration("REDIS_READ_TIMEOUT", time.Second),
+			WriteTimeout: e.duration("REDIS_WRITE_TIMEOUT", time.Second),
 			PoolSize:     e.int("REDIS_POOL_SIZE", 20),
 			MinIdleConns: e.int("REDIS_MIN_IDLE_CONNS", 5),
+		},
+
+		Breaker: BreakerConfig{
+			Enabled:             e.bool("REDIS_BREAKER_ENABLED", true),
+			ConsecutiveFailures: e.int("REDIS_BREAKER_FAILURES", 5),
+			OpenTimeout:         e.duration("REDIS_BREAKER_OPEN_TIMEOUT", 15*time.Second),
 		},
 
 		Auth: AuthConfig{
@@ -209,6 +224,9 @@ func (c *Config) validate(e *env) {
 	e.check(c.Cache.TaskListTTL > 0 && c.Cache.TaskListTTL <= time.Hour,
 		"CACHE_TASK_LIST_TTL must be between 0 and 1h")
 	e.check(c.RateLimit.GlobalMax > 0 && c.RateLimit.AuthMax > 0, "rate limits must be positive")
+	e.check(c.Breaker.ConsecutiveFailures > 0 && c.Breaker.ConsecutiveFailures < 1000,
+		"REDIS_BREAKER_FAILURES must be between 1 and 999")
+	e.check(c.Breaker.OpenTimeout > 0, "REDIS_BREAKER_OPEN_TIMEOUT must be positive")
 
 	// Browsers reject credentialed CORS responses with a wildcard origin.
 	e.check(!c.HTTP.AllowCredentials || !slices.Contains(c.HTTP.AllowedOrigins, "*"),

@@ -30,10 +30,12 @@ func Auth(tokens auth.TokenService, blacklist TokenBlacklist) fiber.Handler {
 			return domain.ErrUnauthorized.WithMessage("invalid or expired access token")
 		}
 
-		// Revoked on logout. Fail closed: if we cannot tell, deny.
+		// Revoked on logout. Fail closed: if revocation cannot be checked
+		// (Redis down / breaker open), deny with a retryable 503 rather
+		// than accept a possibly revoked token.
 		revoked, err := blacklist.IsAccessTokenBlacklisted(c.UserContext(), claims.JTI)
 		if err != nil {
-			return domain.ErrInternal.Wrap(err)
+			return domain.ErrUnavailable.Wrap(err)
 		}
 		if revoked {
 			return domain.ErrUnauthorized.WithMessage("access token has been revoked")

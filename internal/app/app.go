@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/rs/zerolog"
+	"github.com/sony/gobreaker/v2"
 
 	"github.com/ramisoul84/task-management/internal/cache"
 	"github.com/ramisoul84/task-management/internal/config"
@@ -50,6 +51,20 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		return nil, err
 	}
 	log.Info().Str("addr", cfg.Redis.Addr).Msg("redis connected")
+
+	if cfg.Breaker.Enabled {
+		redisx.WithCircuitBreaker(rdb, redisx.BreakerConfig{
+			ConsecutiveFailures: uint32(cfg.Breaker.ConsecutiveFailures), //nolint:gosec // validated range
+			OpenTimeout:         cfg.Breaker.OpenTimeout,
+			OnStateChange: func(from, to gobreaker.State) {
+				ev := log.Warn()
+				if to == gobreaker.StateClosed {
+					ev = log.Info()
+				}
+				ev.Str("from", from.String()).Str("to", to.String()).Msg("redis circuit breaker state changed")
+			},
+		})
+	}
 
 	// Utilities
 	hasher := auth.NewHasher(cfg.Auth.BcryptCost)

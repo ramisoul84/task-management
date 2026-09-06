@@ -37,7 +37,7 @@ func (r *tokenCache) SetRefreshToken(ctx context.Context, hash, userID string) e
 	key := refreshTokenKey(hash)
 
 	if err := r.cache.Set(ctx, key, userID, r.refreshTTL).Err(); err != nil {
-		return fmt.Errorf("save refresh token: %w", err)
+		return unavailable("save refresh token", err)
 	}
 
 	return nil
@@ -52,7 +52,7 @@ func (r *tokenCache) GetRefreshToken(ctx context.Context, hash string) (string, 
 			return "", domain.ErrNotFound
 		}
 
-		return "", fmt.Errorf("get refresh token: %w", err)
+		return "", unavailable("get refresh token", err)
 	}
 
 	return userID, nil
@@ -70,7 +70,7 @@ func (r *tokenCache) RotateRefreshToken(ctx context.Context, oldHash string, new
 		if errors.Is(err, redis.Nil) {
 			return domain.ErrInvalidCredentials
 		}
-		return fmt.Errorf("rotate refresh token: get old token: %w", err)
+		return unavailable("rotate refresh token: get old", err)
 	}
 
 	if oldVal != userID {
@@ -78,7 +78,7 @@ func (r *tokenCache) RotateRefreshToken(ctx context.Context, oldHash string, new
 	}
 
 	if err := r.cache.Set(ctx, newKey, userID, r.refreshTTL).Err(); err != nil {
-		return fmt.Errorf("rotate refresh token: set new token: %w", err)
+		return unavailable("rotate refresh token: set new", err)
 	}
 
 	return nil
@@ -88,7 +88,7 @@ func (r *tokenCache) DeleteRefreshToken(ctx context.Context, hash string) error 
 	key := refreshTokenKey(hash)
 
 	if err := r.cache.Del(ctx, key).Err(); err != nil {
-		return fmt.Errorf("delete refresh token: %w", err)
+		return unavailable("delete refresh token", err)
 	}
 
 	return nil
@@ -101,7 +101,7 @@ func (r *tokenCache) BlacklistAccessToken(ctx context.Context, jti string, ttl t
 
 	key := accessTokenKey(jti)
 	if err := r.cache.Set(ctx, key, "1", ttl).Err(); err != nil {
-		return fmt.Errorf("cache: blacklist %s: %w", jti, err)
+		return unavailable("blacklist access token", err)
 	}
 
 	return nil
@@ -110,7 +110,7 @@ func (r *tokenCache) BlacklistAccessToken(ctx context.Context, jti string, ttl t
 func (r *tokenCache) IsAccessTokenBlacklisted(ctx context.Context, jti string) (bool, error) {
 	n, err := r.cache.Exists(ctx, accessTokenKey(jti)).Result()
 	if err != nil {
-		return false, fmt.Errorf("cache: check blacklist %s: %w", jti, err)
+		return false, unavailable("check access token blacklist", err)
 	}
 
 	return n > 0, nil
@@ -122,4 +122,10 @@ func refreshTokenKey(hashedRefreshToken string) string {
 
 func accessTokenKey(jti string) string {
 	return "auth:bl:" + jti
+}
+
+// unavailable marks a Redis failure as a retryable 503: sessions cannot be
+// verified or stored right now, but the request itself was fine.
+func unavailable(op string, err error) error {
+	return domain.ErrUnavailable.Wrap(fmt.Errorf("tokenCache: %s: %w", op, err))
 }
