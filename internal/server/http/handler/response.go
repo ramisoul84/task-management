@@ -40,6 +40,7 @@ var codeStatus = map[domain.ErrorCode]int{
 	domain.CodeConflict:           http.StatusConflict,
 	domain.CodeVersionConflict:    http.StatusConflict,
 	domain.CodeTooManyRequests:    http.StatusTooManyRequests,
+	domain.CodeUnavailable:        http.StatusServiceUnavailable,
 	domain.CodeInternal:           http.StatusInternalServerError,
 }
 
@@ -57,21 +58,29 @@ var statusCode = map[int]domain.ErrorCode{
 // ErrorResponse. It is the single place errors become HTTP responses, so
 // handlers just `return err`.
 //
-// Only 5xx errors carry internals; their message is replaced by a generic
-// one so causes (SQL, Redis, ...) never leak to clients.
+// Domain error messages are written for clients and always safe to show;
+// their wrapped causes (SQL, Redis, ...) are logged for 5xx and never sent.
+// Any other error becomes a generic 500.
 func ErrorHandler(c *fiber.Ctx, err error) error {
 	status, body := toResponse(err)
 	body.RequestID = middleware.GetRequestID(c)
 
 	if status >= http.StatusInternalServerError {
-		logger.FromContext(c.UserContext()).Error().Err(err).
-			Str("method", c.Method()).
-			Str("path", c.Path()).
-			Msg("request error")
+		// 503s are expected during a dependency outage (one per request
+		// while the breaker is open); keep them out of the error stream.
+		l := logger.FromContext(c.UserContext())
+		ev := l.Error()
+		if status == http.StatusServiceUnavailable {
+			ev = l.Warn()
+		}
+		ev.Err(err).Str("method", c.Method()).Str("path", c.Path()).Msg("request error")
 	}
 
-	if status == http.StatusUnauthorized {
+	switch status {
+	case http.StatusUnauthorized:
 		c.Set(fiber.HeaderWWWAuthenticate, `Bearer realm="api"`)
+	case http.StatusServiceUnavailable:
+		c.Set(fiber.HeaderRetryAfter, "5")
 	}
 
 	return c.Status(status).JSON(body)
@@ -89,10 +98,7 @@ func toResponse(err error) (int, ErrorResponse) {
 	if derr, ok := errors.AsType[*domain.Error](err); ok {
 		status, known := codeStatus[derr.Code]
 		if !known {
-			status = http.StatusInternalServerError
-		}
-		if status >= http.StatusInternalServerError {
-			return status, ErrorResponse{Error: domain.ErrInternal.Message, Code: domain.CodeInternal}
+			return http.StatusInternalServerError, ErrorResponse{Error: domain.ErrInternal.Message, Code: domain.CodeInternal}
 		}
 		return status, ErrorResponse{Error: derr.Message, Code: derr.Code}
 	}

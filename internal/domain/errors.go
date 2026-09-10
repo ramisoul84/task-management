@@ -17,6 +17,7 @@ const (
 	CodeForbidden          ErrorCode = "forbidden"
 	CodeAssigneeNotInTeam  ErrorCode = "assignee_not_in_team"
 	CodeTooManyRequests    ErrorCode = "too_many_requests"
+	CodeUnavailable        ErrorCode = "service_unavailable"
 	CodeInternal           ErrorCode = "internal_error"
 )
 
@@ -72,5 +73,6 @@ var (
 	ErrForbidden          = &Error{Code: CodeForbidden, Message: "insufficient permissions"}
 	ErrAssigneeNotInTeam  = &Error{Code: CodeAssigneeNotInTeam, Message: "assignee must be a member of the team"}
 	ErrTooManyRequests    = &Error{Code: CodeTooManyRequests, Message: "too many requests"}
+	ErrUnavailable        = &Error{Code: CodeUnavailable, Message: "service temporarily unavailable, retry shortly"}
 	ErrInternal           = &Error{Code: CodeInternal, Message: "internal server error"}
 )
