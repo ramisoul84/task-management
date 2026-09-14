@@ -11,6 +11,7 @@ import (
 
 	"github.com/ramisoul84/task-management/internal/cache"
 	"github.com/ramisoul84/task-management/internal/config"
+	"github.com/ramisoul84/task-management/internal/metrics"
 	"github.com/ramisoul84/task-management/internal/repository"
 	httpserver "github.com/ramisoul84/task-management/internal/server/http"
 	"github.com/ramisoul84/task-management/internal/server/http/handler"
@@ -52,6 +53,12 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	}
 	log.Info().Str("addr", cfg.Redis.Addr).Msg("redis connected")
 
+	var m *metrics.Metrics
+	if cfg.HTTP.EnableMetrics {
+		m = metrics.New(cfg.App.Version)
+		m.RegisterDB(db.DB.DB, "mysql")
+	}
+
 	if cfg.Breaker.Enabled {
 		redisx.WithCircuitBreaker(rdb, redisx.BreakerConfig{
 			ConsecutiveFailures: uint32(cfg.Breaker.ConsecutiveFailures), //nolint:gosec // validated range
@@ -62,6 +69,9 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 					ev = log.Info()
 				}
 				ev.Str("from", from.String()).Str("to", to.String()).Msg("redis circuit breaker state changed")
+				if m != nil {
+					m.SetBreakerState(int(to))
+				}
 			},
 		})
 	}
@@ -79,6 +89,9 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	// Caches
 	tokenCache := cache.NewTokenCache(rdb, cfg.Auth.RefreshTokenTTL)
 	taskCache := cache.NewTaskCache(rdb, cfg.Cache.TaskListTTL)
+	if m != nil {
+		taskCache = cache.Instrument(taskCache, m)
+	}
 
 	// Services
 	authSvc := service.NewAuthService(userRepo, tokenCache, tokens, hasher, cfg.Auth.AccessTokenTTL)
@@ -100,6 +113,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		Tokens:     tokens,
 		TokenCache: tokenCache,
 		Redis:      rdb.Client,
+		Metrics:    m,
 		Handlers:   handlers,
 		Checks: map[string]httpserver.HealthCheck{
 			"mysql": db.Health,
