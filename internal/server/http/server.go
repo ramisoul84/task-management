@@ -8,12 +8,15 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/adaptor"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	swagger "github.com/swaggo/fiber-swagger"
 
 	_ "github.com/ramisoul84/task-management/docs" // swagger spec
 	"github.com/ramisoul84/task-management/internal/config"
+	"github.com/ramisoul84/task-management/internal/metrics"
 	"github.com/ramisoul84/task-management/internal/server/http/handler"
 	"github.com/ramisoul84/task-management/internal/server/http/middleware"
 	"github.com/ramisoul84/task-management/pkg/auth"
@@ -37,6 +40,7 @@ type Deps struct {
 	Tokens     auth.TokenService
 	TokenCache middleware.TokenBlacklist
 	Redis      *redis.Client
+	Metrics    *metrics.Metrics // nil disables /metrics
 	Handlers   Handlers
 	Checks     map[string]HealthCheck
 }
@@ -87,12 +91,16 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) App() *fiber.App { return s.app }
 
 // middleware installs the global chain. Order matters:
-// request ID first (so everything is correlated), access log next (so it
-// sees the final status), then recover (so panics become logged 500s).
+// request ID first (so everything is correlated), then metrics and the
+// access log (which renders errors, so both see the final status), then
+// recover (so panics become logged 500s).
 func (s *Server) middleware() {
 	cfg := s.deps.Config
 
 	s.app.Use(middleware.RequestID(s.deps.Log))
+	if s.deps.Metrics != nil {
+		s.app.Use(s.deps.Metrics.HTTP())
+	}
 	s.app.Use(middleware.AccessLog())
 	s.app.Use(middleware.Recover())
 	s.app.Use(middleware.SecureHeaders(cfg.IsProduction()))
@@ -109,6 +117,13 @@ func (s *Server) routes() {
 	s.app.Get("/livez", s.livez)
 	s.app.Get("/readyz", s.readyz)
 	s.app.Get("/health", s.readyz)
+
+	// Scrape endpoint for Prometheus. Keep it off the public internet
+	// (reverse proxy / network policy); it reveals traffic patterns.
+	if s.deps.Metrics != nil {
+		s.app.Get("/metrics", adaptor.HTTPHandler(
+			promhttp.HandlerFor(s.deps.Metrics.Registry, promhttp.HandlerOpts{EnableOpenMetrics: true})))
+	}
 
 	if cfg.HTTP.EnableDocs {
 		s.app.Get("/docs", func(c *fiber.Ctx) error { return c.Redirect("/docs/index.html") })
