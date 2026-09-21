@@ -10,6 +10,7 @@ LDFLAGS    := -s -w \
 	-X main.buildTime=$(BUILD_TIME)
 
 GOLANGCI_VERSION := v2.14.0
+SWAG_VERSION     := v1.16.6
 GOLANGCI         := $(shell go env GOPATH)/bin/golangci-lint
 
 .DEFAULT_GOAL := help
@@ -61,7 +62,7 @@ race: ## Run unit tests with the race detector
 	go test -race ./... -count=1
 
 .PHONY: test-integration
-test-integration: ## Run integration tests (spins up MySQL/Redis via testcontainers; needs Docker)
+test-integration: ## Run integration tests (MySQL via testcontainers; needs Docker)
 	go test -tags=integration ./... -count=1 -v -run Integration
 
 .PHONY: cover
@@ -73,10 +74,15 @@ cover: ## Generate an HTML coverage report
 
 .PHONY: docs
 docs: ## Regenerate Swagger/OpenAPI docs
-	swag fmt -g cmd/task-management/main.go
-	swag init -g cmd/task-management/main.go -o docs/ --parseDependency --parseInternal
+	go run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) fmt -g cmd/task-management/main.go
+	go run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init -g cmd/task-management/main.go -o docs/ --parseDependency --parseInternal
 
 ## ---------- Docker ----------
+
+.PHONY: image
+image: ## Build the Docker image (tagged with the git version)
+	docker build -t $(APP):$(VERSION) \
+		--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) .
 
 .PHONY: up
 up: ## Start the full stack (app, MySQL, Redis)
@@ -93,6 +99,10 @@ logs: ## Tail application logs
 .PHONY: infra
 infra: ## Start only MySQL and Redis (for `make run`)
 	docker compose up -d --wait mysql redis
+
+.PHONY: monitoring
+monitoring: ## Start the stack plus Prometheus (http://localhost:9090)
+	docker compose --profile observability up -d --build --wait
 
 ## ---------- Database ----------
 
