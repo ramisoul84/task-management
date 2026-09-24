@@ -62,7 +62,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 //	@Produce		json
 //	@Param			request	body		domain.LoginRequest	true	"Credentials"
 //	@Success		200		{object}	domain.LoginResponse
-//	@Header			200		{string}	Set-Cookie	"refresh_token=...; HttpOnly"
+//	@Header			200		{string}	Set-Cookie		"refresh_token=...; HttpOnly"
 //	@Failure		400		{object}	ErrorResponse	"Validation error"
 //	@Failure		401		{object}	ErrorResponse	"Invalid credentials"
 //	@Failure		429		{object}	ErrorResponse	"Rate limit exceeded"

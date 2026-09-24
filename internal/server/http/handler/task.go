@@ -57,9 +57,9 @@ func (h *TaskHandler) Create(c *fiber.Ctx) error {
 //	@Tags			Tasks
 //	@Security		BearerAuth
 //	@Produce		json
-//	@Param			team_id		query		string	true	"Team ID"	format(uuid)
-//	@Param			status		query		string	false	"Status"	Enums(todo, in_progress, review, done, cancelled)
-//	@Param			assignee_id	query		string	false	"Assignee"	format(uuid)
+//	@Param			team_id		query		string	true	"Team ID"			format(uuid)
+//	@Param			status		query		string	false	"Status"			Enums(todo, in_progress, review, done, cancelled)
+//	@Param			assignee_id	query		string	false	"Assignee"			format(uuid)
 //	@Param			limit		query		int		false	"Page size (1-100)"	default(20)
 //	@Param			offset		query		int		false	"Offset"			default(0)
 //	@Success		200			{object}	domain.TaskListResponse
