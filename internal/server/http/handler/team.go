@@ -85,10 +85,10 @@ func (h *TeamHandler) List(c *fiber.Ctx) error {
 //	@Param			request	body		domain.InviteMemberRequest	true	"Who to invite"
 //	@Success		201		{object}	domain.TeamMemberAdded
 //	@Failure		400		{object}	ErrorResponse	"Validation error"
-//	@Failure		401	{object}	ErrorResponse
-//	@Failure		403	{object}	ErrorResponse	"Not a team manager"
-//	@Failure		404	{object}	ErrorResponse	"User not found"
-//	@Failure		409	{object}	ErrorResponse	"Already a member"
+//	@Failure		401		{object}	ErrorResponse
+//	@Failure		403		{object}	ErrorResponse	"Not a team manager"
+//	@Failure		404		{object}	ErrorResponse	"User not found"
+//	@Failure		409		{object}	ErrorResponse	"Already a member"
 //	@Router			/teams/{id}/invite [post]
 func (h *TeamHandler) Invite(c *fiber.Ctx) error {
 	userID, err := currentUser(c)

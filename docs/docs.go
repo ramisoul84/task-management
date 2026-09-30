@@ -9,7 +9,12 @@ const docTemplate = `{
     "info": {
         "description": "{{escape .Description}}",
         "title": "{{.Title}}",
-        "contact": {},
+        "contact": {
+            "name": "Rami Suliman"
+        },
+        "license": {
+            "name": "MIT"
+        },
         "version": "{{.Version}}"
     },
     "host": "{{.Host}}",
@@ -17,31 +22,24 @@ const docTemplate = `{
     "paths": {
         "/auth/logout": {
             "post": {
-                "description": "Revoke access token and refresh token",
-                "consumes": [
-                    "application/json"
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
                 ],
-                "produces": [
-                    "application/json"
-                ],
+                "description": "Revokes the bearer access token (if sent) and the refresh-token cookie. Idempotent.",
                 "tags": [
                     "Auth"
                 ],
-                "summary": "Logout user",
+                "summary": "Log out",
                 "responses": {
                     "204": {
-                        "description": "Logged out successfully"
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
-                        }
+                        "description": "No Content"
                     },
                     "500": {
-                        "description": "Internal server error",
+                        "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -49,51 +47,40 @@ const docTemplate = `{
         },
         "/auth/refresh": {
             "post": {
-                "description": "Get new access token using refresh token",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Exchanges the refresh-token cookie for a new access token and rotates the cookie. Each refresh token works once; replaying an old one fails.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Auth"
                 ],
-                "summary": "Refresh access token",
+                "summary": "Refresh the access token",
                 "parameters": [
                     {
-                        "description": "Refresh token",
-                        "name": "refresh_token",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
+                        "type": "string",
+                        "description": "refresh_token=\u003ctoken\u003e",
+                        "name": "Cookie",
+                        "in": "header",
+                        "required": true
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Token refreshed",
+                        "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.RefreshResponse"
                         }
                     },
-                    "400": {
-                        "description": "Validation error",
-                        "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
-                        }
-                    },
                     "401": {
-                        "description": "Invalid refresh token",
+                        "description": "Missing, expired or reused refresh token",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "500": {
-                        "description": "Internal server error",
+                        "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -101,7 +88,7 @@ const docTemplate = `{
         },
         "/login": {
             "post": {
-                "description": "Authenticate user with email and password",
+                "description": "Returns a short-lived JWT access token and sets an HttpOnly refresh-token cookie (path /api/v1/auth). Also served at /auth/login.",
                 "consumes": [
                     "application/json"
                 ],
@@ -111,10 +98,10 @@ const docTemplate = `{
                 "tags": [
                     "Auth"
                 ],
-                "summary": "Login user",
+                "summary": "Log in",
                 "parameters": [
                     {
-                        "description": "Login credentials",
+                        "description": "Credentials",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -125,27 +112,39 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Login successful",
+                        "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.LoginResponse"
+                        },
+                        "headers": {
+                            "Set-Cookie": {
+                                "type": "string",
+                                "description": "refresh_token=...; HttpOnly"
+                            }
                         }
                     },
                     "400": {
                         "description": "Validation error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Invalid credentials",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limit exceeded",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "500": {
-                        "description": "Internal server error",
+                        "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -153,7 +152,7 @@ const docTemplate = `{
         },
         "/register": {
             "post": {
-                "description": "Create a new user account with email and password",
+                "description": "Creates an account. Email is case-insensitive and must be unique. Also served at /auth/register.",
                 "consumes": [
                     "application/json"
                 ],
@@ -163,7 +162,7 @@ const docTemplate = `{
                 "tags": [
                     "Auth"
                 ],
-                "summary": "Register new user",
+                "summary": "Register a new user",
                 "parameters": [
                     {
                         "description": "Registration details",
@@ -177,7 +176,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "201": {
-                        "description": "User registered successfully",
+                        "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.UserResponse"
                         }
@@ -185,19 +184,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Validation error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "409": {
-                        "description": "Email already exists",
+                        "description": "Email already registered",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limit exceeded",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "500": {
-                        "description": "Internal server error",
+                        "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -210,17 +215,18 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get tasks with filters and pagination",
+                "description": "Filtered, paginated list (newest first). Results are cached in Redis for 5 minutes per team+filter combination and invalidated on any task change.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Tasks"
                 ],
-                "summary": "List tasks",
+                "summary": "List a team's tasks",
                 "parameters": [
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Team ID",
                         "name": "team_id",
                         "in": "query",
@@ -235,20 +241,21 @@ const docTemplate = `{
                             "cancelled"
                         ],
                         "type": "string",
-                        "description": "Task status",
+                        "description": "Status",
                         "name": "status",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Assignee ID",
+                        "format": "uuid",
+                        "description": "Assignee",
                         "name": "assignee_id",
                         "in": "query"
                     },
                     {
                         "type": "integer",
                         "default": 20,
-                        "description": "Items per page",
+                        "description": "Page size (1-100)",
                         "name": "limit",
                         "in": "query"
                     },
@@ -262,27 +269,27 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Tasks retrieved",
+                        "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskListResponse"
                         }
                     },
                     "400": {
-                        "description": "Validation error",
+                        "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "403": {
-                        "description": "Not team member",
+                        "description": "Not a team member",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -293,7 +300,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Create a new task in a team",
+                "description": "Any team member can create a task. The caller is the creator; the assignee defaults to the caller and must belong to the team.",
                 "consumes": [
                     "application/json"
                 ],
@@ -303,10 +310,10 @@ const docTemplate = `{
                 "tags": [
                     "Tasks"
                 ],
-                "summary": "Create task",
+                "summary": "Create a task",
                 "parameters": [
                     {
-                        "description": "Task details",
+                        "description": "Task",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -317,46 +324,96 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "201": {
-                        "description": "Task created",
+                        "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.Task"
                         }
                     },
                     "400": {
-                        "description": "Validation error",
+                        "description": "Validation error / assignee not in team",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "403": {
-                        "description": "Not team member",
+                        "description": "Not a team member",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "500": {
-                        "description": "Internal server error",
+                        "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
             }
         },
         "/tasks/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tasks"
+                ],
+                "summary": "Get a task",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.Task"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Task not found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            },
             "put": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Update task with permission checks",
+                "description": "Partial update guarded by optimistic locking: send the version you read; a stale version returns 409. Owner/admin/creator may change any field; the assignee may change only the status. Every change is recorded in history with old and new values.",
                 "consumes": [
                     "application/json"
                 ],
@@ -366,17 +423,18 @@ const docTemplate = `{
                 "tags": [
                     "Tasks"
                 ],
-                "summary": "Update task",
+                "summary": "Update a task",
                 "parameters": [
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Task ID",
                         "name": "id",
                         "in": "path",
                         "required": true
                     },
                     {
-                        "description": "Task updates",
+                        "description": "Fields to change",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -387,39 +445,90 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Task updated",
+                        "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.Task"
                         }
                     },
                     "400": {
-                        "description": "Validation error",
+                        "description": "Validation error / assignee not in team",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "403": {
-                        "description": "Forbidden",
+                        "description": "Not allowed to change this field",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "404": {
                         "description": "Task not found",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "409": {
                         "description": "Version conflict",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Permanently deletes the task with its history and comments. Owner, admin or the task's creator only.",
+                "tags": [
+                    "Tasks"
+                ],
+                "summary": "Delete a task",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Task not found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -432,17 +541,17 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get all comments for a task",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Tasks"
+                    "Comments"
                 ],
-                "summary": "List comments",
+                "summary": "List task comments",
                 "parameters": [
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Task ID",
                         "name": "id",
                         "in": "path",
@@ -451,7 +560,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Comments retrieved",
+                        "description": "OK",
                         "schema": {
                             "type": "array",
                             "items": {
@@ -459,22 +568,22 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "404": {
                         "description": "Task not found",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -485,7 +594,6 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Add comment to a task",
                 "consumes": [
                     "application/json"
                 ],
@@ -493,19 +601,20 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "Tasks"
+                    "Comments"
                 ],
-                "summary": "Add comment",
+                "summary": "Comment on a task",
                 "parameters": [
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Task ID",
                         "name": "id",
                         "in": "path",
                         "required": true
                     },
                     {
-                        "description": "Comment content",
+                        "description": "Comment",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -516,33 +625,164 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "201": {
-                        "description": "Comment added",
+                        "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskComment"
                         }
                     },
                     "400": {
-                        "description": "Validation error",
+                        "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "404": {
                         "description": "Task not found",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/comments/{commentID}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Allowed to the comment's author and to team owners/admins.",
+                "tags": [
+                    "Comments"
+                ],
+                "summary": "Delete a comment",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Comment ID",
+                        "name": "commentID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Comments"
+                ],
+                "summary": "Edit a comment",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Comment ID",
+                        "name": "commentID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New content",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.CreateCommentRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskComment"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Not the author",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -555,17 +795,17 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get change history for a task",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Tasks"
                 ],
-                "summary": "Get task history",
+                "summary": "Task change history",
                 "parameters": [
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Task ID",
                         "name": "id",
                         "in": "path",
@@ -574,7 +814,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Task history",
+                        "description": "OK",
                         "schema": {
                             "type": "array",
                             "items": {
@@ -582,22 +822,22 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "404": {
                         "description": "Task not found",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -610,17 +850,17 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get all teams where current user is a member",
+                "description": "Teams the caller belongs to, with the caller's role in each.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Teams"
                 ],
-                "summary": "List user's teams",
+                "summary": "List my teams",
                 "responses": {
                     "200": {
-                        "description": "Teams retrieved",
+                        "description": "OK",
                         "schema": {
                             "type": "array",
                             "items": {
@@ -631,13 +871,13 @@ const docTemplate = `{
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "500": {
-                        "description": "Internal server error",
+                        "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -648,7 +888,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Create a new team with current user as owner",
+                "description": "Creates a team; the caller becomes its owner. Team and owner membership are created atomically.",
                 "consumes": [
                     "application/json"
                 ],
@@ -658,10 +898,10 @@ const docTemplate = `{
                 "tags": [
                     "Teams"
                 ],
-                "summary": "Create team",
+                "summary": "Create a team",
                 "parameters": [
                     {
-                        "description": "Team details",
+                        "description": "Team",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -672,7 +912,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "201": {
-                        "description": "Team created successfully",
+                        "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.Team"
                         }
@@ -680,19 +920,178 @@ const docTemplate = `{
                     "400": {
                         "description": "Validation error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "500": {
-                        "description": "Internal server error",
+                        "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/teams/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Teams"
+                ],
+                "summary": "Get a team",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.Team"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Not a team member",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Permanently deletes the team with all of its tasks, history and comments. Owner only.",
+                "tags": [
+                    "Teams"
+                ],
+                "summary": "Delete a team",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Not the owner",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Teams"
+                ],
+                "summary": "Rename a team",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New name",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.UpdateTeamRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.Team"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Not owner/admin",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -705,24 +1104,28 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Invite user to team (owner/admin only)",
+                "description": "Adds an existing user (by user_id or email) to the team as admin or member. Owner or admin only; the owner role cannot be granted this way.",
                 "consumes": [
+                    "application/json"
+                ],
+                "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Teams"
                 ],
-                "summary": "Invite member",
+                "summary": "Invite a member",
                 "parameters": [
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Team ID",
                         "name": "id",
                         "in": "path",
                         "required": true
                     },
                     {
-                        "description": "User to invite",
+                        "description": "Who to invite",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -732,37 +1135,87 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "204": {
-                        "description": "Member invited"
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.TeamMemberAdded"
+                        }
                     },
                     "400": {
                         "description": "Validation error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "403": {
-                        "description": "Forbidden",
+                        "description": "Not a team manager",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "404": {
                         "description": "User not found",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "409": {
                         "description": "Already a member",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/teams/{id}/leave": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Removes the caller from the team and unassigns their tasks. The owner must transfer ownership first.",
+                "tags": [
+                    "Teams"
+                ],
+                "summary": "Leave a team",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Owner cannot leave / not a member",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -775,7 +1228,6 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get all members of a team",
                 "produces": [
                     "application/json"
                 ],
@@ -786,6 +1238,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Team ID",
                         "name": "id",
                         "in": "path",
@@ -794,7 +1247,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Members retrieved",
+                        "description": "OK",
                         "schema": {
                             "type": "array",
                             "items": {
@@ -802,22 +1255,22 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "403": {
-                        "description": "Forbidden",
+                        "description": "Not a team member",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Team not found",
-                        "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -830,14 +1283,15 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Remove user from team (owner/admin only)",
+                "description": "Removes a member and unassigns their tasks in this team (recorded in task history). The owner cannot be removed.",
                 "tags": [
                     "Teams"
                 ],
-                "summary": "Remove member",
+                "summary": "Remove a member",
                 "parameters": [
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Team ID",
                         "name": "id",
                         "in": "path",
@@ -845,6 +1299,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "User ID",
                         "name": "userID",
                         "in": "path",
@@ -853,24 +1308,30 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "204": {
-                        "description": "Member removed"
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "404": {
-                        "description": "User not found",
+                        "description": "Member not found",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -883,17 +1344,18 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Change user's role in team (owner/admin only)",
+                "description": "Owner can change admins and members; admins can change members only. The owner's role never changes.",
                 "consumes": [
                     "application/json"
                 ],
                 "tags": [
                     "Teams"
                 ],
-                "summary": "Change member role",
+                "summary": "Change a member's role",
                 "parameters": [
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Team ID",
                         "name": "id",
                         "in": "path",
@@ -901,6 +1363,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "User ID",
                         "name": "userID",
                         "in": "path",
@@ -918,30 +1381,30 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "204": {
-                        "description": "Role updated"
+                        "description": "No Content"
                     },
                     "400": {
-                        "description": "Validation error",
+                        "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "404": {
-                        "description": "User not found",
+                        "description": "Member not found",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -954,17 +1417,18 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get analytics for team (owner/admin only)",
+                "description": "Tasks by status, top 3 assignees by tasks closed in the last 30 days, average close time and comment count. Owner or admin only.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Teams"
                 ],
-                "summary": "Get team statistics",
+                "summary": "Team analytics",
                 "parameters": [
                     {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Team ID",
                         "name": "id",
                         "in": "path",
@@ -973,27 +1437,215 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Team statistics",
+                        "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.TeamStats"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "403": {
-                        "description": "Forbidden",
+                        "description": "Not owner/admin",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/teams/{id}/transfer-ownership": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Makes another member the owner; the current owner becomes an admin. Owner only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Teams"
+                ],
+                "summary": "Transfer team ownership",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New owner",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.TransferOwnershipRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Not the owner",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     },
                     "404": {
-                        "description": "Team not found",
+                        "description": "Target is not a member",
                         "schema": {
-                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorResponse"
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/users/me": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Users"
+                ],
+                "summary": "Current user",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.UserResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Users"
+                ],
+                "summary": "Update my profile",
+                "parameters": [
+                    {
+                        "description": "Profile",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.UpdateProfileRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.UserResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/users/me/password": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires the current password.",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Users"
+                ],
+                "summary": "Change my password",
+                "parameters": [
+                    {
+                        "description": "Passwords",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ChangePasswordRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Wrong current password",
+                        "schema": {
+                            "$ref": "#/definitions/internal_server_http_handler.ErrorResponse"
                         }
                     }
                 }
@@ -1021,6 +1673,26 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_ramisoul84_task-management_internal_domain.ChangePasswordRequest": {
+            "type": "object",
+            "required": [
+                "current_password",
+                "new_password"
+            ],
+            "properties": {
+                "current_password": {
+                    "type": "string",
+                    "maxLength": 72,
+                    "example": "OldPass123!"
+                },
+                "new_password": {
+                    "type": "string",
+                    "maxLength": 72,
+                    "minLength": 8,
+                    "example": "NewPass456!"
+                }
+            }
+        },
         "github_com_ramisoul84_task-management_internal_domain.CreateCommentRequest": {
             "type": "object",
             "required": [
@@ -1030,7 +1702,6 @@ const docTemplate = `{
                 "content": {
                     "type": "string",
                     "maxLength": 5000,
-                    "minLength": 1,
                     "example": "This bug is caused by a race condition in the auth flow"
                 }
             }
@@ -1050,6 +1721,24 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 5000,
                     "example": "Users cannot login with Google OAuth"
+                },
+                "due_at": {
+                    "type": "string",
+                    "example": "2024-02-01T17:00:00Z"
+                },
+                "priority": {
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "urgent"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskPriority"
+                        }
+                    ],
+                    "example": "high"
                 },
                 "team_id": {
                     "type": "string",
@@ -1077,20 +1766,88 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_ramisoul84_task-management_internal_domain.ErrorResponse": {
-            "type": "object",
-            "properties": {
-                "error": {
-                    "type": "string"
-                }
-            }
+        "github_com_ramisoul84_task-management_internal_domain.ErrorCode": {
+            "type": "string",
+            "enum": [
+                "invalid_input",
+                "validation_failed",
+                "not_found",
+                "already_exists",
+                "conflict",
+                "version_conflict",
+                "unauthorized",
+                "invalid_credentials",
+                "forbidden",
+                "assignee_not_in_team",
+                "too_many_requests",
+                "service_unavailable",
+                "internal_error"
+            ],
+            "x-enum-comments": {
+                "CodeInvalidCredentials": "nolint:gosec // error code, not a credential"
+            },
+            "x-enum-descriptions": [
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "nolint:gosec // error code, not a credential",
+                "",
+                "",
+                "",
+                "",
+                ""
+            ],
+            "x-enum-varnames": [
+                "CodeInvalidInput",
+                "CodeValidationFailed",
+                "CodeNotFound",
+                "CodeAlreadyExists",
+                "CodeConflict",
+                "CodeVersionConflict",
+                "CodeUnauthorized",
+                "CodeInvalidCredentials",
+                "CodeForbidden",
+                "CodeAssigneeNotInTeam",
+                "CodeTooManyRequests",
+                "CodeUnavailable",
+                "CodeInternal"
+            ]
+        },
+        "github_com_ramisoul84_task-management_internal_domain.HistoryAction": {
+            "type": "string",
+            "enum": [
+                "created",
+                "updated"
+            ],
+            "x-enum-varnames": [
+                "HistoryCreated",
+                "HistoryUpdated"
+            ]
         },
         "github_com_ramisoul84_task-management_internal_domain.InviteMemberRequest": {
             "type": "object",
-            "required": [
-                "user_id"
-            ],
             "properties": {
+                "email": {
+                    "type": "string",
+                    "maxLength": 255,
+                    "example": "colleague@example.com"
+                },
+                "role": {
+                    "enum": [
+                        "admin",
+                        "member"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.Role"
+                        }
+                    ],
+                    "example": "member"
+                },
                 "user_id": {
                     "type": "string",
                     "example": "123e4567-e89b-12d3-a456-426614174001"
@@ -1111,6 +1868,7 @@ const docTemplate = `{
                 },
                 "password": {
                     "type": "string",
+                    "maxLength": 72,
                     "example": "StrongPass123!"
                 }
             }
@@ -1162,15 +1920,18 @@ const docTemplate = `{
             "properties": {
                 "email": {
                     "type": "string",
+                    "maxLength": 255,
                     "example": "rami@mail.ru"
                 },
                 "name": {
                     "type": "string",
+                    "maxLength": 255,
                     "minLength": 2,
                     "example": "Rami Suliman"
                 },
                 "password": {
                     "type": "string",
+                    "maxLength": 72,
                     "minLength": 8,
                     "example": "StrongPass123!"
                 }
@@ -1212,9 +1973,21 @@ const docTemplate = `{
                     "type": "string",
                     "example": "Users cannot login with Google OAuth"
                 },
+                "due_at": {
+                    "type": "string",
+                    "example": "2024-02-01T17:00:00Z"
+                },
                 "id": {
                     "type": "string",
                     "example": "123e4567-e89b-12d3-a456-426614174000"
+                },
+                "priority": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskPriority"
+                        }
+                    ],
+                    "example": "medium"
                 },
                 "status": {
                     "allOf": [
@@ -1253,6 +2026,10 @@ const docTemplate = `{
                     "type": "string",
                     "example": "2024-01-15T11:00:00Z"
                 },
+                "edited": {
+                    "type": "boolean",
+                    "example": false
+                },
                 "id": {
                     "type": "string",
                     "example": "123e4567-e89b-12d3-a456-426614174004"
@@ -1261,24 +2038,41 @@ const docTemplate = `{
                     "type": "string",
                     "example": "123e4567-e89b-12d3-a456-426614174000"
                 },
+                "updated_at": {
+                    "type": "string",
+                    "example": "2024-01-15T11:00:00Z"
+                },
                 "user_id": {
                     "type": "string",
                     "example": "123e4567-e89b-12d3-a456-426614174002"
+                },
+                "user_name": {
+                    "type": "string",
+                    "example": "Rami Suliman"
                 }
             }
         },
         "github_com_ramisoul84_task-management_internal_domain.TaskHistory": {
             "type": "object",
             "properties": {
+                "action": {
+                    "enum": [
+                        "created",
+                        "updated"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.HistoryAction"
+                        }
+                    ],
+                    "example": "updated"
+                },
                 "changed_by": {
                     "type": "string",
                     "example": "123e4567-e89b-12d3-a456-426614174002"
                 },
                 "changes": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
+                    "type": "object"
                 },
                 "created_at": {
                     "type": "string",
@@ -1305,6 +2099,11 @@ const docTemplate = `{
                     "type": "integer",
                     "example": 20
                 },
+                "next_cursor": {
+                    "description": "NextCursor fetches the following page via ?cursor=. Present when\nhas_more is true and the sort supports keyset pagination\n(created_at, updated_at).",
+                    "type": "string",
+                    "example": "eyJzIjoiY3JlYXRlZF9hdCIsIm8iOiJkZXNjIiwidCI6IjIwMjQtMDEtMTVUMTA6MzA6MDBaIiwiaSI6IjEyMyJ9"
+                },
                 "offset": {
                     "type": "integer",
                     "example": 0
@@ -1320,6 +2119,21 @@ const docTemplate = `{
                     "example": 50
                 }
             }
+        },
+        "github_com_ramisoul84_task-management_internal_domain.TaskPriority": {
+            "type": "string",
+            "enum": [
+                "low",
+                "medium",
+                "high",
+                "urgent"
+            ],
+            "x-enum-varnames": [
+                "PriorityLow",
+                "PriorityMedium",
+                "PriorityHigh",
+                "PriorityUrgent"
+            ]
         },
         "github_com_ramisoul84_task-management_internal_domain.TaskStatus": {
             "type": "string",
@@ -1356,6 +2170,36 @@ const docTemplate = `{
                 "name": {
                     "type": "string",
                     "example": "Development Team"
+                },
+                "role": {
+                    "description": "Role is the current user's role in the team (set on list endpoints).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.Role"
+                        }
+                    ],
+                    "example": "owner"
+                }
+            }
+        },
+        "github_com_ramisoul84_task-management_internal_domain.TeamMemberAdded": {
+            "type": "object",
+            "properties": {
+                "role": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.Role"
+                        }
+                    ],
+                    "example": "member"
+                },
+                "team_id": {
+                    "type": "string",
+                    "example": "123e4567-e89b-12d3-a456-426614174000"
+                },
+                "user_id": {
+                    "type": "string",
+                    "example": "123e4567-e89b-12d3-a456-426614174001"
                 }
             }
         },
@@ -1390,6 +2234,10 @@ const docTemplate = `{
                 "avg_close_time_hours": {
                     "type": "number",
                     "example": 48.5
+                },
+                "overdue_tasks": {
+                    "type": "integer",
+                    "example": 3
                 },
                 "tasks_by_status": {
                     "type": "object",
@@ -1430,6 +2278,32 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_ramisoul84_task-management_internal_domain.TransferOwnershipRequest": {
+            "type": "object",
+            "required": [
+                "user_id"
+            ],
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "example": "123e4567-e89b-12d3-a456-426614174001"
+                }
+            }
+        },
+        "github_com_ramisoul84_task-management_internal_domain.UpdateProfileRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "maxLength": 255,
+                    "minLength": 2,
+                    "example": "Rami Suliman"
+                }
+            }
+        },
         "github_com_ramisoul84_task-management_internal_domain.UpdateTaskRequest": {
             "type": "object",
             "required": [
@@ -1444,6 +2318,27 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 5000,
                     "example": "Users cannot login with Google OAuth on mobile"
+                },
+                "due_at": {
+                    "description": "DueAt: omit to keep, null to clear, a timestamp to set.",
+                    "type": "string",
+                    "format": "date-time",
+                    "x-nullable": true,
+                    "example": "2024-02-01T17:00:00Z"
+                },
+                "priority": {
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "urgent"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.TaskPriority"
+                        }
+                    ],
+                    "example": "urgent"
                 },
                 "status": {
                     "enum": [
@@ -1473,9 +2368,27 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_ramisoul84_task-management_internal_domain.UpdateTeamRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "maxLength": 255,
+                    "minLength": 2,
+                    "example": "Platform Team"
+                }
+            }
+        },
         "github_com_ramisoul84_task-management_internal_domain.UserResponse": {
             "type": "object",
             "properties": {
+                "created_at": {
+                    "type": "string",
+                    "example": "2024-01-15T10:30:00Z"
+                },
                 "email": {
                     "type": "string",
                     "example": "rami@mail.ru"
@@ -1489,10 +2402,51 @@ const docTemplate = `{
                     "example": "Rami Suliman"
                 }
             }
+        },
+        "github_com_ramisoul84_task-management_pkg_validator.FieldError": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string",
+                    "example": "title"
+                },
+                "message": {
+                    "type": "string",
+                    "example": "must be at least 3 characters"
+                }
+            }
+        },
+        "internal_server_http_handler.ErrorResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_ramisoul84_task-management_internal_domain.ErrorCode"
+                        }
+                    ],
+                    "example": "forbidden"
+                },
+                "details": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_ramisoul84_task-management_pkg_validator.FieldError"
+                    }
+                },
+                "error": {
+                    "type": "string",
+                    "example": "insufficient permissions"
+                },
+                "request_id": {
+                    "type": "string",
+                    "example": "0f8c2a4e-1b7d-4a53-9a41-5bd1f2a1c0de"
+                }
+            }
         }
     },
     "securityDefinitions": {
         "BearerAuth": {
+            "description": "Type \"Bearer\" followed by a space and the access token.",
             "type": "apiKey",
             "name": "Authorization",
             "in": "header"
@@ -1505,9 +2459,9 @@ var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
 	Host:             "localhost:8080",
 	BasePath:         "/api/v1",
-	Schemes:          []string{},
+	Schemes:          []string{"http", "https"},
 	Title:            "Task Management API",
-	Description:      "REST API for managing tasks within teams with RBAC",
+	Description:      "REST API for managing tasks inside teams: role-based access control, task history, comments, Redis-cached listings and team analytics.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",
